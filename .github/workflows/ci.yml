@@ -32,3 +32,25 @@ jobs:
 
       - name: Build
         run: go build ./cmd/agentmesh
+
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.23.x"
+          cache: true
+
+      - name: Start distributed dependencies
+        run: docker compose up -d --wait postgres nats redis
+
+      - name: Integration test
+        run: go test -tags=integration -count=1 ./internal/integration
+
+      - name: Stop distributed dependencies
+        if: always()
+        run: docker compose down -v

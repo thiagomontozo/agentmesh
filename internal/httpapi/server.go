@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -55,7 +56,13 @@ func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
-func (s *Server) ready(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) ready(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+	defer cancel()
+	if err := s.engine.Ready(ctx); err != nil {
+		writeError(w, http.StatusServiceUnavailable, "dependencies are not ready")
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
 }
 
@@ -83,16 +90,24 @@ func (s *Server) createAgent(w http.ResponseWriter, r *http.Request) {
 		SystemPrompt: strings.TrimSpace(request.SystemPrompt),
 		CreatedAt:    time.Now().UTC(),
 	}
-	s.store.CreateAgent(agent)
+	if _, err := s.store.CreateAgent(r.Context(), agent); err != nil {
+		writeError(w, http.StatusInternalServerError, "could not create agent")
+		return
+	}
 	writeJSON(w, http.StatusCreated, agent)
 }
 
-func (s *Server) listAgents(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"items": s.store.ListAgents()})
+func (s *Server) listAgents(w http.ResponseWriter, r *http.Request) {
+	agents, err := s.store.ListAgents(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not list agents")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": agents})
 }
 
 func (s *Server) getAgent(w http.ResponseWriter, r *http.Request) {
-	agent, err := s.store.GetAgent(r.PathValue("id"))
+	agent, err := s.store.GetAgent(r.Context(), r.PathValue("id"))
 	if errors.Is(err, store.ErrNotFound) {
 		writeError(w, http.StatusNotFound, "agent not found")
 		return
@@ -122,29 +137,52 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "agent_id and input are required")
 		return
 	}
-	if _, err := s.store.GetAgent(request.AgentID); errors.Is(err, store.ErrNotFound) {
+	if _, err := s.store.GetAgent(r.Context(), request.AgentID); errors.Is(err, store.ErrNotFound) {
 		writeError(w, http.StatusNotFound, "agent not found")
+		return
+	} else if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load agent")
+		return
+	}
+	idempotencyKey := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
+	if len(idempotencyKey) > 128 {
+		writeError(w, http.StatusBadRequest, "Idempotency-Key must be at most 128 characters")
 		return
 	}
 
 	run := domain.Run{
-		ID:        newID("run"),
-		AgentID:   request.AgentID,
-		Input:     request.Input,
-		Status:    domain.RunQueued,
-		CreatedAt: time.Now().UTC(),
+		ID:          newID("run"),
+		AgentID:     request.AgentID,
+		Input:       request.Input,
+		Status:      domain.RunQueued,
+		MaxAttempts: s.engine.MaxAttempts(),
+		CreatedAt:   time.Now().UTC(),
 	}
-	s.store.CreateRun(run)
+	createdRun, isNew, err := s.store.CreateRun(r.Context(), run, idempotencyKey)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not create run")
+		return
+	}
+	if !isNew {
+		if createdRun.AgentID != request.AgentID || createdRun.Input != request.Input {
+			writeError(w, http.StatusConflict, "Idempotency-Key was already used with a different request")
+			return
+		}
+		w.Header().Set("Idempotency-Replayed", "true")
+		writeJSON(w, http.StatusOK, createdRun)
+		return
+	}
+	run = createdRun
 	s.events.Publish(domain.RunEvent{
 		RunID: run.ID, Type: "run.queued", Message: "run queued", Timestamp: time.Now().UTC(),
 	})
 
-	if err := s.engine.Enqueue(run.ID); err != nil {
+	if err := s.engine.Enqueue(r.Context(), run.ID); err != nil {
 		if transitionErr := run.Fail(err, time.Now()); transitionErr != nil {
 			writeError(w, http.StatusInternalServerError, "could not fail run")
 			return
 		}
-		if updateErr := s.store.UpdateRun(run); updateErr != nil {
+		if updateErr := s.store.UpdateRun(r.Context(), run); updateErr != nil {
 			writeError(w, http.StatusInternalServerError, "could not update run")
 			return
 		}
@@ -158,12 +196,17 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, run)
 }
 
-func (s *Server) listRuns(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"items": s.store.ListRuns()})
+func (s *Server) listRuns(w http.ResponseWriter, r *http.Request) {
+	runs, err := s.store.ListRuns(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not list runs")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": runs})
 }
 
 func (s *Server) getRun(w http.ResponseWriter, r *http.Request) {
-	run, err := s.store.GetRun(r.PathValue("id"))
+	run, err := s.store.GetRun(r.Context(), r.PathValue("id"))
 	if errors.Is(err, store.ErrNotFound) {
 		writeError(w, http.StatusNotFound, "run not found")
 		return
@@ -177,7 +220,7 @@ func (s *Server) getRun(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) runEvents(w http.ResponseWriter, r *http.Request) {
 	runID := r.PathValue("id")
-	if _, err := s.store.GetRun(runID); errors.Is(err, store.ErrNotFound) {
+	if _, err := s.store.GetRun(r.Context(), runID); errors.Is(err, store.ErrNotFound) {
 		writeError(w, http.StatusNotFound, "run not found")
 		return
 	}
@@ -221,6 +264,9 @@ func decodeJSON(r *http.Request, destination any) error {
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(destination); err != nil {
 		return fmt.Errorf("invalid JSON: %w", err)
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return fmt.Errorf("invalid JSON: body must contain a single object")
 	}
 	return nil
 }

@@ -3,11 +3,14 @@ package engine
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/thiagomontozo/agentmesh/internal/coordination"
 	"github.com/thiagomontozo/agentmesh/internal/domain"
 	"github.com/thiagomontozo/agentmesh/internal/events"
+	"github.com/thiagomontozo/agentmesh/internal/queue"
 	"github.com/thiagomontozo/agentmesh/internal/store"
 )
 
@@ -18,72 +21,68 @@ func (f executorFunc) Execute(ctx context.Context, agent domain.Agent, input str
 }
 
 func TestEngineCompletesRun(t *testing.T) {
-	memory := store.NewMemory()
-	memory.CreateAgent(domain.Agent{ID: "agt_1", Name: "test"})
-	memory.CreateRun(domain.Run{ID: "run_1", AgentID: "agt_1", Input: "hello", Status: domain.RunQueued})
-	bus := events.NewBus()
-	executor := executorFunc(func(context.Context, domain.Agent, string) (string, error) {
+	memory, _, runEngine := newEngineTest(t, executorFunc(func(context.Context, domain.Agent, string) (string, error) {
 		return "done", nil
-	})
-	engine := New(memory, bus, executor, 1, 1)
-	ctx, cancel := context.WithCancel(context.Background())
-	engine.Start(ctx)
-	t.Cleanup(func() {
-		cancel()
-		engine.Stop()
-	})
+	}), 3)
+	enqueueTestRun(t, memory, runEngine)
 
-	if err := engine.Enqueue("run_1"); err != nil {
-		t.Fatal(err)
-	}
 	run := waitForStatus(t, memory, "run_1", domain.RunSucceeded)
-	if run.Output != "done" || run.StartedAt == nil || run.CompletedAt == nil {
+	if run.Output != "done" || run.Attempt != 1 || run.StartedAt == nil || run.CompletedAt == nil {
 		t.Fatalf("unexpected completed run: %+v", run)
 	}
 }
 
-func TestEngineFailsRunWhenExecutorFails(t *testing.T) {
-	memory := store.NewMemory()
-	memory.CreateAgent(domain.Agent{ID: "agt_1", Name: "test"})
-	memory.CreateRun(domain.Run{ID: "run_1", AgentID: "agt_1", Status: domain.RunQueued})
-	bus := events.NewBus()
+func TestEngineRetriesBeforeSuccess(t *testing.T) {
+	var attempts atomic.Int32
+	wantErr := errors.New("temporary failure")
+	executor := executorFunc(func(context.Context, domain.Agent, string) (string, error) {
+		if attempts.Add(1) < 3 {
+			return "", wantErr
+		}
+		return "done", nil
+	})
+	memory, _, runEngine := newEngineTest(t, executor, 3)
+	enqueueTestRun(t, memory, runEngine)
+
+	run := waitForStatus(t, memory, "run_1", domain.RunSucceeded)
+	if run.Attempt != 3 || run.Output != "done" {
+		t.Fatalf("unexpected retried run: %+v", run)
+	}
+}
+
+func TestEngineDeadLettersAfterRetriesAreExhausted(t *testing.T) {
 	wantErr := errors.New("executor failed")
 	executor := executorFunc(func(context.Context, domain.Agent, string) (string, error) {
 		return "", wantErr
 	})
-	engine := New(memory, bus, executor, 1, 1)
-	ctx, cancel := context.WithCancel(context.Background())
-	engine.Start(ctx)
-	t.Cleanup(func() {
-		cancel()
-		engine.Stop()
-	})
+	memory, memoryQueue, runEngine := newEngineTest(t, executor, 2)
+	enqueueTestRun(t, memory, runEngine)
 
-	if err := engine.Enqueue("run_1"); err != nil {
-		t.Fatal(err)
-	}
 	run := waitForStatus(t, memory, "run_1", domain.RunFailed)
-	if run.Error != wantErr.Error() {
-		t.Fatalf("expected %q, got %q", wantErr, run.Error)
+	if run.Error != wantErr.Error() || run.Attempt != 2 {
+		t.Fatalf("unexpected failed run: %+v", run)
+	}
+	deadLetters := memoryQueue.DeadLetters()
+	if len(deadLetters) != 1 || deadLetters[0].RunID != run.ID {
+		t.Fatalf("unexpected dead letters: %+v", deadLetters)
 	}
 }
 
-func TestEngineFailsRunningRunWhenContextIsCanceled(t *testing.T) {
-	memory := store.NewMemory()
-	memory.CreateAgent(domain.Agent{ID: "agt_1", Name: "test"})
-	memory.CreateRun(domain.Run{ID: "run_1", AgentID: "agt_1", Status: domain.RunQueued})
-	bus := events.NewBus()
+func TestEngineLeavesRunningRunRecoverableWhenContextIsCanceled(t *testing.T) {
 	started := make(chan struct{})
 	executor := executorFunc(func(ctx context.Context, _ domain.Agent, _ string) (string, error) {
 		close(started)
 		<-ctx.Done()
 		return "", ctx.Err()
 	})
-	engine := New(memory, bus, executor, 1, 1)
+	memory := store.NewMemory()
+	memoryQueue := queue.NewMemory(8)
+	bus := events.NewBus()
+	runEngine := New(memory, bus, executor, memoryQueue, coordination.NewMemory(), 1, testRetryPolicy(3))
 	ctx, cancel := context.WithCancel(context.Background())
-	engine.Start(ctx)
-
-	if err := engine.Enqueue("run_1"); err != nil {
+	runEngine.Start(ctx)
+	createTestData(t, memory, 3)
+	if err := runEngine.Enqueue(ctx, "run_1"); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -92,14 +91,129 @@ func TestEngineFailsRunningRunWhenContextIsCanceled(t *testing.T) {
 		t.Fatal("timed out waiting for executor to start")
 	}
 	cancel()
-	engine.Stop()
+	runEngine.Stop()
 
-	run, err := memory.GetRun("run_1")
+	run, err := memory.GetRun(context.Background(), "run_1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if run.Status != domain.RunFailed || run.Error != context.Canceled.Error() {
-		t.Fatalf("unexpected canceled run: %+v", run)
+	if run.Status != domain.RunRunning {
+		t.Fatalf("expected recoverable running run, got %+v", run)
+	}
+	ids, err := memory.RecoverPendingRuns(context.Background())
+	if err != nil || len(ids) != 1 || ids[0] != run.ID {
+		t.Fatalf("unexpected recovery result: ids=%v err=%v", ids, err)
+	}
+	recovered, err := memory.GetRun(context.Background(), run.ID)
+	if err != nil || recovered.Status != domain.RunQueued || recovered.Attempt != 0 {
+		t.Fatalf("unexpected recovered run: run=%+v err=%v", recovered, err)
+	}
+}
+
+func TestEngineIgnoresDuplicateDeliveryForSucceededRun(t *testing.T) {
+	var calls atomic.Int32
+	executor := executorFunc(func(context.Context, domain.Agent, string) (string, error) {
+		calls.Add(1)
+		return "unexpected", nil
+	})
+	memory, _, runEngine := newEngineTest(t, executor, 3)
+	ctx := context.Background()
+	if _, err := memory.CreateAgent(ctx, domain.Agent{ID: "agt_1", Name: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := memory.CreateRun(ctx, domain.Run{
+		ID: "run_1", AgentID: "agt_1", Status: domain.RunSucceeded, Attempt: 1, MaxAttempts: 3,
+	}, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := runEngine.Enqueue(ctx, "run_1"); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(20 * time.Millisecond)
+	if calls.Load() != 0 {
+		t.Fatalf("executor was called %d times", calls.Load())
+	}
+}
+
+func TestEngineLeasePreventsConcurrentDuplicateExecution(t *testing.T) {
+	var calls atomic.Int32
+	started := make(chan struct{})
+	release := make(chan struct{})
+	executor := executorFunc(func(context.Context, domain.Agent, string) (string, error) {
+		if calls.Add(1) == 1 {
+			close(started)
+		}
+		<-release
+		return "done", nil
+	})
+	memory := store.NewMemory()
+	memoryQueue := queue.NewMemory(4)
+	runEngine := New(memory, events.NewBus(), executor, memoryQueue, coordination.NewMemory(), 2, testRetryPolicy(3))
+	ctx, cancel := context.WithCancel(context.Background())
+	runEngine.Start(ctx)
+	t.Cleanup(func() {
+		cancel()
+		runEngine.Stop()
+	})
+	createTestData(t, memory, 3)
+	if err := runEngine.Enqueue(ctx, "run_1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := runEngine.Enqueue(ctx, "run_1"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for executor")
+	}
+	close(release)
+	waitForStatus(t, memory, "run_1", domain.RunSucceeded)
+	time.Sleep(150 * time.Millisecond)
+	if calls.Load() != 1 {
+		t.Fatalf("expected one executor call, got %d", calls.Load())
+	}
+}
+
+func newEngineTest(t *testing.T, executor Executor, maxAttempts int) (*store.Memory, *queue.Memory, *Engine) {
+	t.Helper()
+	memory := store.NewMemory()
+	memoryQueue := queue.NewMemory(8)
+	bus := events.NewBus()
+	runEngine := New(memory, bus, executor, memoryQueue, coordination.NewMemory(), 1, testRetryPolicy(maxAttempts))
+	ctx, cancel := context.WithCancel(context.Background())
+	runEngine.Start(ctx)
+	t.Cleanup(func() {
+		cancel()
+		runEngine.Stop()
+	})
+	return memory, memoryQueue, runEngine
+}
+
+func testRetryPolicy(maxAttempts int) RetryPolicy {
+	return RetryPolicy{
+		MaxAttempts: maxAttempts, InitialBackoff: time.Millisecond, MaxBackoff: 2 * time.Millisecond, LeaseTTL: time.Minute,
+	}
+}
+
+func enqueueTestRun(t *testing.T, memory *store.Memory, runEngine *Engine) {
+	t.Helper()
+	createTestData(t, memory, runEngine.MaxAttempts())
+	if err := runEngine.Enqueue(context.Background(), "run_1"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func createTestData(t *testing.T, memory *store.Memory, maxAttempts int) {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := memory.CreateAgent(ctx, domain.Agent{ID: "agt_1", Name: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := memory.CreateRun(ctx, domain.Run{
+		ID: "run_1", AgentID: "agt_1", Input: "hello", Status: domain.RunQueued, MaxAttempts: maxAttempts,
+	}, ""); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -107,7 +221,7 @@ func waitForStatus(t *testing.T, memory *store.Memory, runID string, want domain
 	t.Helper()
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
-		run, err := memory.GetRun(runID)
+		run, err := memory.GetRun(context.Background(), runID)
 		if err != nil {
 			t.Fatal(err)
 		}

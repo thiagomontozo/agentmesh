@@ -41,3 +41,17 @@ func TestEventsAreIsolatedByRun(t *testing.T) {
 	case <-time.After(20 * time.Millisecond):
 	}
 }
+
+func TestHistoryIsBounded(t *testing.T) {
+	bus := NewBusWithHistoryLimit(2)
+	for _, eventType := range []string{"one", "two", "three"} {
+		bus.Publish(domain.RunEvent{RunID: "run_1", Type: eventType})
+	}
+	events, unsubscribe := bus.Subscribe("run_1")
+	defer unsubscribe()
+	for _, want := range []string{"two", "three"} {
+		if got := <-events; got.Type != want {
+			t.Fatalf("expected %s, got %s", want, got.Type)
+		}
+	}
+}

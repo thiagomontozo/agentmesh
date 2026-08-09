@@ -10,18 +10,28 @@ type Bus struct {
 	mu          sync.RWMutex
 	subscribers map[string]map[chan domain.RunEvent]struct{}
 	history     map[string][]domain.RunEvent
+	maxHistory  int
 }
 
 func NewBus() *Bus {
+	return NewBusWithHistoryLimit(128)
+}
+
+func NewBusWithHistoryLimit(maxHistory int) *Bus {
 	return &Bus{
 		subscribers: make(map[string]map[chan domain.RunEvent]struct{}),
 		history:     make(map[string][]domain.RunEvent),
+		maxHistory:  maxHistory,
 	}
 }
 
 func (b *Bus) Publish(event domain.RunEvent) {
 	b.mu.Lock()
 	b.history[event.RunID] = append(b.history[event.RunID], event)
+	if b.maxHistory >= 0 && len(b.history[event.RunID]) > b.maxHistory {
+		start := len(b.history[event.RunID]) - b.maxHistory
+		b.history[event.RunID] = append([]domain.RunEvent(nil), b.history[event.RunID][start:]...)
+	}
 	for ch := range b.subscribers[event.RunID] {
 		select {
 		case ch <- event:

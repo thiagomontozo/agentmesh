@@ -9,13 +9,27 @@ import (
 
 type Config struct {
 	Addr            string
+	Mode            string
 	Workers         int
 	QueueSize       int
 	ExecutionDelay  time.Duration
 	ShutdownTimeout time.Duration
+	DatabaseURL     string
+	NATSURL         string
+	RedisURL        string
+	MaxAttempts     int
+	RetryInitial    time.Duration
+	RetryMax        time.Duration
+	NATSAckWait     time.Duration
+	CacheTTL        time.Duration
+	LeaseTTL        time.Duration
 }
 
 func Load() (Config, error) {
+	mode := stringEnv("AGENTMESH_MODE", "memory")
+	if mode != "memory" && mode != "distributed" {
+		return Config{}, fmt.Errorf("AGENTMESH_MODE must be memory or distributed")
+	}
 	workers, err := intEnv("AGENTMESH_WORKERS", 4)
 	if err != nil {
 		return Config{}, err
@@ -41,13 +55,69 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	maxAttempts, err := intEnv("AGENTMESH_MAX_ATTEMPTS", 3)
+	if err != nil {
+		return Config{}, err
+	}
+	if maxAttempts < 1 {
+		return Config{}, fmt.Errorf("AGENTMESH_MAX_ATTEMPTS must be >= 1")
+	}
+	retryInitial, err := durationEnv("AGENTMESH_RETRY_INITIAL_BACKOFF", 250*time.Millisecond)
+	if err != nil {
+		return Config{}, err
+	}
+	retryMax, err := durationEnv("AGENTMESH_RETRY_MAX_BACKOFF", 5*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+	if retryInitial <= 0 || retryMax < retryInitial {
+		return Config{}, fmt.Errorf("retry backoff must be positive and max must be >= initial")
+	}
+	natsAckWait, err := durationEnv("AGENTMESH_NATS_ACK_WAIT", 2*time.Minute)
+	if err != nil {
+		return Config{}, err
+	}
+	if natsAckWait <= 0 {
+		return Config{}, fmt.Errorf("AGENTMESH_NATS_ACK_WAIT must be > 0")
+	}
+	cacheTTL, err := durationEnv("AGENTMESH_CACHE_TTL", 30*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+	if cacheTTL <= 0 {
+		return Config{}, fmt.Errorf("AGENTMESH_CACHE_TTL must be > 0")
+	}
+	leaseTTL, err := durationEnv("AGENTMESH_LEASE_TTL", 5*time.Minute)
+	if err != nil {
+		return Config{}, err
+	}
+	if leaseTTL <= 0 {
+		return Config{}, fmt.Errorf("AGENTMESH_LEASE_TTL must be > 0")
+	}
+
+	databaseURL := stringEnv("AGENTMESH_DATABASE_URL", "")
+	natsURL := stringEnv("AGENTMESH_NATS_URL", "")
+	redisURL := stringEnv("AGENTMESH_REDIS_URL", "")
+	if mode == "distributed" && (databaseURL == "" || natsURL == "" || redisURL == "") {
+		return Config{}, fmt.Errorf("distributed mode requires AGENTMESH_DATABASE_URL, AGENTMESH_NATS_URL and AGENTMESH_REDIS_URL")
+	}
 
 	return Config{
 		Addr:            stringEnv("AGENTMESH_ADDR", ":8080"),
+		Mode:            mode,
 		Workers:         workers,
 		QueueSize:       queueSize,
 		ExecutionDelay:  executionDelay,
 		ShutdownTimeout: shutdownTimeout,
+		DatabaseURL:     databaseURL,
+		NATSURL:         natsURL,
+		RedisURL:        redisURL,
+		MaxAttempts:     maxAttempts,
+		RetryInitial:    retryInitial,
+		RetryMax:        retryMax,
+		NATSAckWait:     natsAckWait,
+		CacheTTL:        cacheTTL,
+		LeaseTTL:        leaseTTL,
 	}, nil
 }
 

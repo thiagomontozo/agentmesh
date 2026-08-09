@@ -2,13 +2,17 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
 	"time"
 
+	"github.com/thiagomontozo/agentmesh/internal/coordination"
 	"github.com/thiagomontozo/agentmesh/internal/domain"
 	"github.com/thiagomontozo/agentmesh/internal/events"
+	"github.com/thiagomontozo/agentmesh/internal/queue"
+	"github.com/thiagomontozo/agentmesh/internal/store"
 )
 
 type Executor interface {
@@ -19,10 +23,11 @@ type DemoExecutor struct {
 	Delay time.Duration
 }
 
-type Repository interface {
-	GetAgent(id string) (domain.Agent, error)
-	GetRun(id string) (domain.Run, error)
-	UpdateRun(run domain.Run) error
+type RetryPolicy struct {
+	MaxAttempts    int
+	InitialBackoff time.Duration
+	MaxBackoff     time.Duration
+	LeaseTTL       time.Duration
 }
 
 func (d DemoExecutor) Execute(ctx context.Context, agent domain.Agent, input string) (string, error) {
@@ -39,106 +44,190 @@ func (d DemoExecutor) Execute(ctx context.Context, agent domain.Agent, input str
 }
 
 type Engine struct {
-	store    Repository
+	store    store.Repository
 	events   *events.Bus
 	executor Executor
-	queue    chan string
+	queue    queue.Queue
+	coord    coordination.Coordinator
 	workers  int
+	retry    RetryPolicy
 	wg       sync.WaitGroup
+	errors   chan error
 }
 
-func New(s Repository, bus *events.Bus, executor Executor, workers, queueSize int) *Engine {
+func New(s store.Repository, bus *events.Bus, executor Executor, q queue.Queue, coord coordination.Coordinator, workers int, retry RetryPolicy) *Engine {
 	return &Engine{
 		store:    s,
 		events:   bus,
 		executor: executor,
-		queue:    make(chan string, queueSize),
+		queue:    q,
+		coord:    coord,
 		workers:  workers,
+		retry:    retry,
+		errors:   make(chan error, 1),
 	}
 }
 
 func (e *Engine) Start(ctx context.Context) {
-	for i := 0; i < e.workers; i++ {
-		e.wg.Add(1)
-		go e.worker(ctx, i+1)
-	}
+	e.wg.Add(1)
+	go func() {
+		defer e.wg.Done()
+		if err := e.queue.Consume(ctx, e.workers, e.execute); err != nil && ctx.Err() == nil {
+			select {
+			case e.errors <- err:
+			default:
+			}
+		}
+	}()
 }
 
 func (e *Engine) Stop() {
 	e.wg.Wait()
-}
-
-func (e *Engine) Enqueue(runID string) error {
-	select {
-	case e.queue <- runID:
-		return nil
-	default:
-		return fmt.Errorf("run queue is full")
+	if err := e.queue.Close(); err != nil {
+		slog.Error("run queue close failed", "error", err)
 	}
 }
 
-func (e *Engine) worker(ctx context.Context, workerID int) {
-	defer e.wg.Done()
+func (e *Engine) Errors() <-chan error {
+	return e.errors
+}
+
+func (e *Engine) MaxAttempts() int {
+	return e.retry.MaxAttempts
+}
+
+func (e *Engine) Enqueue(ctx context.Context, runID string) error {
+	return e.queue.Enqueue(ctx, runID)
+}
+
+func (e *Engine) Recover(ctx context.Context) error {
+	runIDs, err := e.store.RecoverPendingRuns(ctx)
+	if err != nil {
+		return fmt.Errorf("recover pending runs: %w", err)
+	}
+	for _, runID := range runIDs {
+		if err := e.Enqueue(ctx, runID); err != nil {
+			return fmt.Errorf("recover run %s: %w", runID, err)
+		}
+	}
+	return nil
+}
+
+func (e *Engine) Ready(ctx context.Context) error {
+	if err := e.store.Ping(ctx); err != nil {
+		return fmt.Errorf("repository: %w", err)
+	}
+	if err := e.queue.Ping(ctx); err != nil {
+		return fmt.Errorf("queue: %w", err)
+	}
+	if err := e.coord.Ping(ctx); err != nil {
+		return fmt.Errorf("coordination: %w", err)
+	}
+	return nil
+}
+
+func (e *Engine) execute(ctx context.Context, runID string) error {
+	run, err := e.store.GetRun(ctx, runID)
+	if err != nil {
+		return fmt.Errorf("load run %s: %w", runID, err)
+	}
+	if run.Status == domain.RunSucceeded {
+		return nil
+	}
+	if run.Status == domain.RunFailed {
+		return e.queue.DeadLetter(ctx, run.ID, errors.New(run.Error))
+	}
+	lease, acquired, err := e.coord.Acquire(ctx, "run:"+run.ID, e.retry.LeaseTTL)
+	if err != nil {
+		return fmt.Errorf("acquire run lease: %w", err)
+	}
+	if !acquired {
+		return fmt.Errorf("run %s is already being processed", run.ID)
+	}
+	defer func() {
+		releaseCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		if err := lease.Release(releaseCtx); err != nil {
+			slog.Error("run lease release failed", "run_id", run.ID, "error", err)
+		}
+	}()
+
+	agent, err := e.store.GetAgent(ctx, run.AgentID)
+	if err != nil {
+		return e.failRun(ctx, run, fmt.Errorf("agent not found: %w", err))
+	}
+
+	if run.MaxAttempts < 1 {
+		run.MaxAttempts = e.retry.MaxAttempts
+	}
 	for {
+		if run.Status == domain.RunQueued {
+			err = run.Start(time.Now())
+		} else {
+			err = run.Retry()
+		}
+		if err != nil {
+			return err
+		}
+		if err := e.store.UpdateRun(ctx, run); err != nil {
+			return fmt.Errorf("persist run attempt: %w", err)
+		}
+		e.publish(run.ID, "run.started", fmt.Sprintf("attempt %d of %d started", run.Attempt, run.MaxAttempts))
+
+		output, executeErr := e.executor.Execute(ctx, agent, run.Input)
+		if executeErr == nil {
+			if err := run.Succeed(output, time.Now()); err != nil {
+				return err
+			}
+			if err := e.store.UpdateRun(ctx, run); err != nil {
+				return fmt.Errorf("persist completed run: %w", err)
+			}
+			e.publish(run.ID, "run.succeeded", "run completed successfully")
+			return nil
+		}
+		if errors.Is(executeErr, context.Canceled) || errors.Is(executeErr, context.DeadlineExceeded) {
+			return executeErr
+		}
+		if run.Attempt >= run.MaxAttempts {
+			return e.failRun(ctx, run, executeErr)
+		}
+
+		backoff := e.backoff(run.Attempt)
+		e.publish(run.ID, "run.retrying", fmt.Sprintf("attempt %d failed; retrying in %s: %v", run.Attempt, backoff, executeErr))
 		select {
 		case <-ctx.Done():
-			return
-		case runID := <-e.queue:
-			e.execute(ctx, workerID, runID)
+			return ctx.Err()
+		case <-time.After(backoff):
 		}
 	}
 }
 
-func (e *Engine) execute(ctx context.Context, workerID int, runID string) {
-	run, err := e.store.GetRun(runID)
-	if err != nil {
-		slog.Error("worker could not load run", "worker", workerID, "run_id", runID, "error", err)
-		return
-	}
-
-	agent, err := e.store.GetAgent(run.AgentID)
-	if err != nil {
-		e.failRun(run, fmt.Errorf("agent not found: %w", err))
-		return
-	}
-
-	if err := run.Start(time.Now()); err != nil {
-		slog.Error("worker could not start run", "worker", workerID, "run_id", runID, "error", err)
-		return
-	}
-	if err := e.store.UpdateRun(run); err != nil {
-		slog.Error("worker could not persist running run", "worker", workerID, "run_id", runID, "error", err)
-		return
-	}
-	e.publish(run.ID, "run.started", fmt.Sprintf("worker %d started the run", workerID))
-
-	output, err := e.executor.Execute(ctx, agent, run.Input)
-	if err != nil {
-		e.failRun(run, err)
-		return
-	}
-
-	if err := run.Succeed(output, time.Now()); err != nil {
-		slog.Error("worker could not complete run", "worker", workerID, "run_id", runID, "error", err)
-		return
-	}
-	if err := e.store.UpdateRun(run); err != nil {
-		slog.Error("worker could not persist completed run", "worker", workerID, "run_id", runID, "error", err)
-		return
-	}
-	e.publish(run.ID, "run.succeeded", "run completed successfully")
-}
-
-func (e *Engine) failRun(run domain.Run, err error) {
+func (e *Engine) failRun(ctx context.Context, run domain.Run, err error) error {
 	if transitionErr := run.Fail(err, time.Now()); transitionErr != nil {
-		slog.Error("worker could not fail run", "run_id", run.ID, "error", transitionErr)
-		return
+		return transitionErr
 	}
-	if updateErr := e.store.UpdateRun(run); updateErr != nil {
-		slog.Error("worker could not persist failed run", "run_id", run.ID, "error", updateErr)
-		return
+	if updateErr := e.store.UpdateRun(ctx, run); updateErr != nil {
+		return fmt.Errorf("persist failed run: %w", updateErr)
 	}
 	e.publish(run.ID, "run.failed", err.Error())
+	if deadLetterErr := e.queue.DeadLetter(ctx, run.ID, err); deadLetterErr != nil {
+		return fmt.Errorf("dead-letter run: %w", deadLetterErr)
+	}
+	return nil
+}
+
+func (e *Engine) backoff(attempt int) time.Duration {
+	backoff := e.retry.InitialBackoff
+	for i := 1; i < attempt; i++ {
+		if backoff >= e.retry.MaxBackoff/2 {
+			return e.retry.MaxBackoff
+		}
+		backoff *= 2
+	}
+	if backoff > e.retry.MaxBackoff {
+		return e.retry.MaxBackoff
+	}
+	return backoff
 }
 
 func (e *Engine) publish(runID, eventType, message string) {

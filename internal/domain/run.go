@@ -21,6 +21,8 @@ type Run struct {
 	Output      string     `json:"output,omitempty"`
 	Status      RunStatus  `json:"status"`
 	Error       string     `json:"error,omitempty"`
+	Attempt     int        `json:"attempt"`
+	MaxAttempts int        `json:"max_attempts"`
 	CreatedAt   time.Time  `json:"created_at"`
 	StartedAt   *time.Time `json:"started_at,omitempty"`
 	CompletedAt *time.Time `json:"completed_at,omitempty"`
@@ -30,9 +32,24 @@ func (r *Run) Start(at time.Time) error {
 	if r.Status != RunQueued {
 		return fmt.Errorf("cannot transition run from %s to %s", r.Status, RunRunning)
 	}
+	if r.MaxAttempts > 0 && r.Attempt >= r.MaxAttempts {
+		return fmt.Errorf("run has exhausted %d attempts", r.MaxAttempts)
+	}
 	at = at.UTC()
 	r.Status = RunRunning
 	r.StartedAt = &at
+	r.Attempt++
+	return nil
+}
+
+func (r *Run) Retry() error {
+	if r.Status != RunRunning {
+		return fmt.Errorf("cannot retry run in status %s", r.Status)
+	}
+	if r.MaxAttempts > 0 && r.Attempt >= r.MaxAttempts {
+		return fmt.Errorf("run has exhausted %d attempts", r.MaxAttempts)
+	}
+	r.Attempt++
 	return nil
 }
 
