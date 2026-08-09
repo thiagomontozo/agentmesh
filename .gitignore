@@ -1,0 +1,26 @@
+# Binaries
+bin/
+agentmesh
+agentmesh.exe
+*.exe
+*.test
+*.out
+
+# Go
+vendor/
+coverage.out
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Logs / temp
+*.log
+tmp/

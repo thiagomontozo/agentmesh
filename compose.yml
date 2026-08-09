@@ -1,0 +1,15 @@
+services:
+  agentmesh:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      AGENTMESH_ADDR: ":8080"
+      AGENTMESH_WORKERS: "4"
+      AGENTMESH_QUEUE_SIZE: "128"
+      AGENTMESH_EXECUTION_DELAY: "750ms"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8080/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
