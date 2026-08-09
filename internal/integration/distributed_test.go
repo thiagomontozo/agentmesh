@@ -72,7 +72,10 @@ func TestDistributedRunLifecycleAndIdempotency(t *testing.T) {
 	}
 	waitForStatus(t, ctx, repository, created.ID, domain.RunSucceeded)
 
-	replayed, isNew, err := repository.CreateRun(ctx, domain.Run{ID: "different"}, "integration-"+suffix)
+	replayed, isNew, err := repository.CreateRun(ctx, domain.Run{
+		ID: "different_" + suffix, AgentID: agent.ID, Input: run.Input, Status: domain.RunQueued,
+		MaxAttempts: 3, CreatedAt: time.Now().UTC(),
+	}, "integration-"+suffix)
 	if err != nil || isNew || replayed.ID != created.ID {
 		t.Fatalf("idempotency replay: run=%+v new=%v err=%v", replayed, isNew, err)
 	}
