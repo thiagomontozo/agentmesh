@@ -9,7 +9,6 @@ import (
 
 	"github.com/thiagomontozo/agentmesh/internal/domain"
 	"github.com/thiagomontozo/agentmesh/internal/events"
-	"github.com/thiagomontozo/agentmesh/internal/store"
 )
 
 type Executor interface {
@@ -18,6 +17,12 @@ type Executor interface {
 
 type DemoExecutor struct {
 	Delay time.Duration
+}
+
+type Repository interface {
+	GetAgent(id string) (domain.Agent, error)
+	GetRun(id string) (domain.Run, error)
+	UpdateRun(run domain.Run) error
 }
 
 func (d DemoExecutor) Execute(ctx context.Context, agent domain.Agent, input string) (string, error) {
@@ -34,7 +39,7 @@ func (d DemoExecutor) Execute(ctx context.Context, agent domain.Agent, input str
 }
 
 type Engine struct {
-	store    *store.Memory
+	store    Repository
 	events   *events.Bus
 	executor Executor
 	queue    chan string
@@ -42,7 +47,7 @@ type Engine struct {
 	wg       sync.WaitGroup
 }
 
-func New(s *store.Memory, bus *events.Bus, executor Executor, workers, queueSize int) *Engine {
+func New(s Repository, bus *events.Bus, executor Executor, workers, queueSize int) *Engine {
 	return &Engine{
 		store:    s,
 		events:   bus,
@@ -97,10 +102,14 @@ func (e *Engine) execute(ctx context.Context, workerID int, runID string) {
 		return
 	}
 
-	started := time.Now().UTC()
-	run.Status = domain.RunRunning
-	run.StartedAt = &started
-	_ = e.store.UpdateRun(run)
+	if err := run.Start(time.Now()); err != nil {
+		slog.Error("worker could not start run", "worker", workerID, "run_id", runID, "error", err)
+		return
+	}
+	if err := e.store.UpdateRun(run); err != nil {
+		slog.Error("worker could not persist running run", "worker", workerID, "run_id", runID, "error", err)
+		return
+	}
 	e.publish(run.ID, "run.started", fmt.Sprintf("worker %d started the run", workerID))
 
 	output, err := e.executor.Execute(ctx, agent, run.Input)
@@ -109,20 +118,26 @@ func (e *Engine) execute(ctx context.Context, workerID int, runID string) {
 		return
 	}
 
-	completed := time.Now().UTC()
-	run.Status = domain.RunSucceeded
-	run.Output = output
-	run.CompletedAt = &completed
-	_ = e.store.UpdateRun(run)
+	if err := run.Succeed(output, time.Now()); err != nil {
+		slog.Error("worker could not complete run", "worker", workerID, "run_id", runID, "error", err)
+		return
+	}
+	if err := e.store.UpdateRun(run); err != nil {
+		slog.Error("worker could not persist completed run", "worker", workerID, "run_id", runID, "error", err)
+		return
+	}
 	e.publish(run.ID, "run.succeeded", "run completed successfully")
 }
 
 func (e *Engine) failRun(run domain.Run, err error) {
-	completed := time.Now().UTC()
-	run.Status = domain.RunFailed
-	run.Error = err.Error()
-	run.CompletedAt = &completed
-	_ = e.store.UpdateRun(run)
+	if transitionErr := run.Fail(err, time.Now()); transitionErr != nil {
+		slog.Error("worker could not fail run", "run_id", run.ID, "error", transitionErr)
+		return
+	}
+	if updateErr := e.store.UpdateRun(run); updateErr != nil {
+		slog.Error("worker could not persist failed run", "run_id", run.ID, "error", updateErr)
+		return
+	}
 	e.publish(run.ID, "run.failed", err.Error())
 }
 

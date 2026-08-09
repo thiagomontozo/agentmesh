@@ -19,13 +19,13 @@ import (
 )
 
 type Server struct {
-	store  *store.Memory
+	store  store.Repository
 	engine *engine.Engine
 	events *events.Bus
 	mux    *http.ServeMux
 }
 
-func New(s *store.Memory, e *engine.Engine, bus *events.Bus) *Server {
+func New(s store.Repository, e *engine.Engine, bus *events.Bus) *Server {
 	server := &Server{store: s, engine: e, events: bus, mux: http.NewServeMux()}
 	server.routes()
 	return server
@@ -140,11 +140,17 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 	})
 
 	if err := s.engine.Enqueue(run.ID); err != nil {
-		run.Status = domain.RunFailed
-		run.Error = err.Error()
-		completed := time.Now().UTC()
-		run.CompletedAt = &completed
-		_ = s.store.UpdateRun(run)
+		if transitionErr := run.Fail(err, time.Now()); transitionErr != nil {
+			writeError(w, http.StatusInternalServerError, "could not fail run")
+			return
+		}
+		if updateErr := s.store.UpdateRun(run); updateErr != nil {
+			writeError(w, http.StatusInternalServerError, "could not update run")
+			return
+		}
+		s.events.Publish(domain.RunEvent{
+			RunID: run.ID, Type: "run.failed", Message: err.Error(), Timestamp: time.Now().UTC(),
+		})
 		writeError(w, http.StatusServiceUnavailable, err.Error())
 		return
 	}

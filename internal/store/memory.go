@@ -16,6 +16,8 @@ type Memory struct {
 	runs   map[string]domain.Run
 }
 
+var _ Repository = (*Memory)(nil)
+
 func NewMemory() *Memory {
 	return &Memory{
 		agents: make(map[string]domain.Agent),
