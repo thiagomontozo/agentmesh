@@ -12,13 +12,13 @@
 - [x] Container image
 
 ## v0.2 — Durable distributed execution
-- [ ] PostgreSQL repository
-- [ ] NATS JetStream queue
-- [ ] Redis cache / distributed coordination
-- [ ] Database migrations
-- [ ] Idempotency keys
-- [ ] Retry and exponential backoff
-- [ ] Dead-letter handling
+- [x] PostgreSQL repository
+- [x] NATS JetStream queue
+- [x] Redis cache / distributed coordination
+- [x] Database migrations
+- [x] Idempotency keys
+- [x] Retry and exponential backoff
+- [x] Dead-letter handling
 
 ## v0.3 — Real agent runtime
 - [ ] LLM provider interface

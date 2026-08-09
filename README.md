@@ -4,7 +4,7 @@
 
 AgentMesh is a portfolio-grade control-plane project for registering agents, submitting asynchronous runs, processing work through a concurrent worker pool, and streaming run lifecycle events to clients.
 
-> **Current stage: v0.1 MVP.** The runtime intentionally uses an in-memory store and deterministic demo executor so the control-plane core can be tested without external infrastructure. PostgreSQL, NATS JetStream, Redis, MCP, and real LLM providers are planned as incremental architectural upgrades.
+> **Current stage: v0.2.** AgentMesh supports a zero-infrastructure memory mode and a durable distributed mode backed by PostgreSQL, NATS JetStream, and Redis. The deterministic demo executor remains intentional; real LLM and MCP runtimes are planned for v0.3.
 
 ## Why this project exists
 
@@ -15,8 +15,8 @@ The goal is to explore the engineering behind agent infrastructure rather than b
 ```mermaid
 flowchart LR
     C[Client] -->|REST| API[Go HTTP API]
-    API --> S[(In-memory Store)]
-    API --> Q[Run Queue]
+    API --> S[(Repository)]
+    API --> Q[Queue]
     Q --> W1[Worker 1]
     Q --> W2[Worker 2]
     Q --> WN[Worker N]
@@ -28,6 +28,9 @@ flowchart LR
     W2 --> B
     WN --> B
     B -->|SSE| C
+    S -. distributed .-> PG[(PostgreSQL)]
+    S -. cache .-> R[(Redis)]
+    Q -. distributed .-> N[NATS JetStream]
 ```
 
 The executor is an interface. The current `DemoExecutor` is deliberately deterministic; future providers can call OpenAI-compatible APIs, local inference servers, or MCP-enabled runtimes without changing the HTTP layer.
@@ -47,6 +50,12 @@ The executor is an interface. The current `DemoExecutor` is deliberately determi
 - Multi-stage Docker build
 - GitHub Actions CI
 - Zero third-party Go dependencies in v0.1
+- PostgreSQL persistence and embedded migrations
+- NATS JetStream durable run delivery and dead-letter subject
+- Redis read-through cache with graceful database fallback
+- Idempotent run creation through `Idempotency-Key`
+- Configurable retry with exponential backoff
+- Restart recovery for queued/running work
 
 ## API
 
@@ -89,8 +98,11 @@ curl -X POST http://localhost:8080/api/v1/agents \
 ```bash
 curl -X POST http://localhost:8080/api/v1/runs \
   -H "Content-Type: application/json" \
+  -H "Idempotency-Key: explain-control-planes-1" \
   -d '{"agent_id":"agt_REPLACE_ME","input":"Explain control planes."}'
 ```
+
+Reusing the same idempotency key and payload returns the original run with `Idempotency-Replayed: true`. Reusing it with a different payload returns `409 Conflict`.
 
 ### Windows PowerShell smoke test
 
@@ -105,10 +117,20 @@ With the server running in one terminal:
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `AGENTMESH_ADDR` | `:8080` | HTTP bind address |
+| `AGENTMESH_MODE` | `memory` | `memory` or `distributed` runtime |
 | `AGENTMESH_WORKERS` | `4` | Worker goroutines |
 | `AGENTMESH_QUEUE_SIZE` | `128` | In-memory run queue capacity |
 | `AGENTMESH_EXECUTION_DELAY` | `750ms` | Demo executor latency |
 | `AGENTMESH_SHUTDOWN_TIMEOUT` | `10s` | HTTP graceful-shutdown timeout |
+| `AGENTMESH_MAX_ATTEMPTS` | `3` | Executor attempts before dead-lettering |
+| `AGENTMESH_RETRY_INITIAL_BACKOFF` | `250ms` | Initial retry delay |
+| `AGENTMESH_RETRY_MAX_BACKOFF` | `5s` | Maximum exponential retry delay |
+| `AGENTMESH_DATABASE_URL` | — | PostgreSQL URL required in distributed mode |
+| `AGENTMESH_NATS_URL` | — | NATS URL required in distributed mode |
+| `AGENTMESH_REDIS_URL` | — | Redis URL required in distributed mode |
+| `AGENTMESH_NATS_ACK_WAIT` | `2m` | JetStream acknowledgement timeout |
+| `AGENTMESH_CACHE_TTL` | `30s` | Redis cache lifetime |
+| `AGENTMESH_LEASE_TTL` | `5m` | Distributed per-run execution lease |
 
 ## Test
 
@@ -118,11 +140,17 @@ go test -race ./...
 go vet ./...
 ```
 
-## Docker
+Distributed integration tests require the Compose dependencies:
 
 ```bash
-docker compose up --build
+docker compose up -d --wait postgres nats redis
+go test -tags=integration -count=1 ./internal/integration
+docker compose down -v
 ```
+
+## Docker
+
+`docker compose up --build` starts the complete distributed stack. For the lightweight local mode, use `go run ./cmd/agentmesh`.
 
 ## Project structure
 
@@ -133,25 +161,33 @@ internal/domain/        core domain models
 internal/engine/        queue, workers and executor abstraction
 internal/events/        in-process event bus
 internal/httpapi/       REST + SSE transport
-internal/store/         thread-safe in-memory repository
+internal/queue/         memory and NATS JetStream queues
+internal/cache/         Redis cache adapter
+internal/store/         memory, cached and PostgreSQL repositories
 scripts/                PowerShell developer utilities
 docs/                   roadmap and architecture notes
 .github/workflows/      CI pipeline
 ```
 
+## Documentation
+
+- [Architecture and delivery guarantees](docs/architecture.md)
+- [Configuration and operations](docs/configuration.md)
+- [API usage and examples](docs/api.md)
+- [Troubleshooting](docs/troubleshooting.md)
+- [Roadmap](docs/roadmap.md)
+
 ## Next milestones
 
-The next iteration replaces process-local infrastructure with durable/distributed components:
+The next iterations add the real agent runtime and production operations:
 
-1. PostgreSQL for agents and run state
-2. NATS JetStream for durable work delivery
-3. Redis for caching and distributed coordination
-4. Retry/backoff, idempotency and dead-letter handling
-5. Real LLM provider abstraction
-6. MCP tool gateway
-7. OpenTelemetry
-8. Next.js operations dashboard
-9. Kubernetes/Helm deployment
+1. Real LLM provider abstraction
+2. MCP tool gateway and tool policies
+3. Human approval gates
+4. OpenTelemetry and Prometheus
+5. Authentication, RBAC and audit log
+6. Next.js operations dashboard
+7. Kubernetes/Helm deployment
 
 See [`docs/roadmap.md`](docs/roadmap.md).
 

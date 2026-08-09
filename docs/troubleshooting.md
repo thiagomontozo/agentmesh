@@ -1,0 +1,37 @@
+# Troubleshooting
+
+## `unlinkat ... httpapi.test.exe` on Windows
+
+If all package tests report `ok` and the error occurs only while Go removes a temporary `.test.exe`, first treat it as Windows file locking rather than an AgentMesh failure. Antivirus scanning and indexing can briefly retain newly created executables.
+
+Recommended checks:
+
+1. Run `go test -count=1 ./...` again.
+2. Confirm that no `.test.exe` process remains active.
+3. Temporarily set `GOTMPDIR` to a dedicated development temp directory.
+4. Review antivirus history before adding any exclusion.
+
+Do not disable security software globally.
+
+## `/readyz` returns 503
+
+In distributed mode, verify all three URLs and dependencies:
+
+```bash
+docker compose ps
+docker compose logs postgres nats redis agentmesh
+```
+
+PostgreSQL must accept connections, NATS must have JetStream enabled, and Redis must answer `PING`.
+
+## Docker daemon is unavailable
+
+Start Docker Desktop and wait until its Linux engine is ready. `docker compose config` validates the file without starting the stack; `docker compose up --build` requires the engine.
+
+## A run stays queued after restart
+
+Check NATS connectivity and the `AGENTMESH_RUNS` stream. AgentMesh republishes pending run IDs during startup, but cannot do so while JetStream is unavailable. Readiness will remain `503` in that condition.
+
+## A run is retried more than once
+
+JetStream provides at-least-once delivery. Duplicate delivery is expected after acknowledgement loss. AgentMesh treats terminal runs as already processed, while future side-effecting executors must make their own external actions idempotent.
