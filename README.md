@@ -1,5 +1,8 @@
 # AgentMesh
 
+[![CI](https://github.com/thiagomontozo/agentmesh/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/thiagomontozo/agentmesh/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 **Distributed AI Agent Control Plane written in Go.**
 
 AgentMesh is a portfolio-grade control-plane project for registering agents, submitting asynchronous runs, processing work through a concurrent worker pool, and streaming run lifecycle events to clients.
