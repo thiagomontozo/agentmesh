@@ -2,6 +2,12 @@
 
 [![CI](https://github.com/thiagomontozo/agentmesh/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/thiagomontozo/agentmesh/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+![Stage: v0.2](https://img.shields.io/badge/stage-v0.2-2563eb)
+![Go](https://img.shields.io/badge/Go-control_plane-00ADD8?logo=go&logoColor=white)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-durable_store-4169E1?logo=postgresql&logoColor=white)
+![NATS JetStream](https://img.shields.io/badge/NATS-JetStream-27AAE1?logo=natsdotio&logoColor=white)
+![Redis](https://img.shields.io/badge/Redis-coordination-DC382D?logo=redis&logoColor=white)
+![Docker](https://img.shields.io/badge/Docker-containerized-2496ED?logo=docker&logoColor=white)
 
 **Distributed AI Agent Control Plane written in Go.**
 
