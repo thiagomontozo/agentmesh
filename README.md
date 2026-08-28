@@ -188,6 +188,7 @@ docs/                   roadmap and architecture notes
 
 - [Architecture and delivery guarantees](docs/architecture.md)
 - [Agent Protocol V1](docs/agent-protocol-v1.md)
+- [External HTTP Agents](docs/external-agents.md)
 - [Configuration and operations](docs/configuration.md)
 - [API usage and examples](docs/api.md)
 - [Troubleshooting](docs/troubleshooting.md)
