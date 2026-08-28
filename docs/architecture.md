@@ -46,6 +46,12 @@ Each runtime attempt runs synchronously under a child context bounded by `AGENTM
 
 `Runtime.Execute` is also a panic boundary. A recovered panic becomes an explicit execution error, follows the existing retry/dead-letter lifecycle, and cannot terminate the process or the consuming worker. The structured error log includes Run ID, Agent ID, attempt, panic value, and stack trace. Queue handlers do not currently propagate worker identity to the Engine, so `worker_id` is not yet available at this boundary. Lease release and queue semaphore cleanup remain protected by their existing defers outside the runtime call.
 
+## Run cancellation
+
+`POST /api/v1/runs/{id}/cancel` atomically moves a queued or running Run to `canceled`. The Engine keeps cancel functions only for active executions in its own process, so local runtime contexts—including outbound HTTP requests—are interrupted immediately and retry backoff stops. Queued messages are not removed from the queue; consumers acknowledge them without execution after observing the terminal state.
+
+PostgreSQL and Memory reject stale updates to a canceled Run. This prevents a worker in another replica from overwriting cancellation with a late success or failure. There is not yet a distributed cancellation signal: a remote worker may continue its current external call until it returns or reaches the attempt timeout, but its result is discarded. The cancellation event bus is also process-local at this stage.
+
 The language boundary is covered by an integration test with two independent HTTP endpoints. Both Agents are registered through the public API and share one HTTP runtime; adding the second Agent introduces only data, not another executor implementation. See [External HTTP Agents](external-agents.md).
 
 ## Memory mode

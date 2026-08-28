@@ -61,6 +61,8 @@ type Engine struct {
 	retry    RetryPolicy
 	wg       sync.WaitGroup
 	errors   chan error
+	activeMu sync.Mutex
+	active   map[string]context.CancelFunc
 }
 
 func New(s store.Repository, bus *events.Bus, executor Executor, q queue.Queue, coord coordination.Coordinator, workers int, retry RetryPolicy) *Engine {
@@ -81,6 +83,7 @@ func NewWithResolver(s store.Repository, bus *events.Bus, resolver agentruntime.
 		workers:  workers,
 		retry:    retry,
 		errors:   make(chan error, 1),
+		active:   make(map[string]context.CancelFunc),
 	}
 }
 
@@ -114,6 +117,21 @@ func (e *Engine) MaxAttempts() int {
 
 func (e *Engine) Enqueue(ctx context.Context, runID string) error {
 	return e.queue.Enqueue(ctx, runID)
+}
+
+func (e *Engine) Cancel(ctx context.Context, runID string) (domain.Run, error) {
+	run, err := e.store.CancelRun(ctx, runID, time.Now())
+	if err != nil {
+		return run, err
+	}
+	e.activeMu.Lock()
+	cancelExecution := e.active[runID]
+	e.activeMu.Unlock()
+	if cancelExecution != nil {
+		cancelExecution()
+	}
+	e.publish(run.ID, "run.canceled", "run canceled")
+	return run, nil
 }
 
 func (e *Engine) Recover(ctx context.Context) error {
@@ -153,6 +171,9 @@ func (e *Engine) execute(ctx context.Context, runID string) error {
 	if run.Status == domain.RunFailed {
 		return e.queue.DeadLetter(ctx, run.ID, errors.New(run.Error))
 	}
+	if run.Status == domain.RunCanceled {
+		return nil
+	}
 	lease, acquired, err := e.coord.Acquire(ctx, "run:"+run.ID, e.retry.LeaseTTL)
 	if err != nil {
 		return fmt.Errorf("acquire run lease: %w", err)
@@ -167,6 +188,24 @@ func (e *Engine) execute(ctx context.Context, runID string) error {
 			slog.Error("run lease release failed", "run_id", run.ID, "error", err)
 		}
 	}()
+	runCtx, cancelExecution := context.WithCancel(ctx)
+	e.activeMu.Lock()
+	e.active[run.ID] = cancelExecution
+	e.activeMu.Unlock()
+	defer func() {
+		cancelExecution()
+		e.activeMu.Lock()
+		delete(e.active, run.ID)
+		e.activeMu.Unlock()
+	}()
+
+	run, err = e.store.GetRun(ctx, run.ID)
+	if err != nil {
+		return fmt.Errorf("reload run %s: %w", run.ID, err)
+	}
+	if run.Status == domain.RunCanceled {
+		return nil
+	}
 
 	agent, err := e.store.GetAgent(ctx, run.AgentID)
 	if err != nil {
@@ -190,11 +229,14 @@ func (e *Engine) execute(ctx context.Context, runID string) error {
 			return err
 		}
 		if err := e.store.UpdateRun(ctx, run); err != nil {
+			if errors.Is(err, store.ErrRunCanceled) {
+				return nil
+			}
 			return fmt.Errorf("persist run attempt: %w", err)
 		}
 		e.publish(run.ID, "run.started", fmt.Sprintf("attempt %d of %d started", run.Attempt, run.MaxAttempts))
 
-		attemptCtx, cancelAttempt := context.WithTimeout(ctx, e.retry.AttemptTimeout)
+		attemptCtx, cancelAttempt := context.WithTimeout(runCtx, e.retry.AttemptTimeout)
 		result, executeErr := executeRuntimeSafely(attemptCtx, implementation, agentruntime.ExecutionRequest{
 			RunID: run.ID, Agent: agent, Attempt: run.Attempt, Input: run.Input,
 		})
@@ -202,6 +244,9 @@ func (e *Engine) execute(ctx context.Context, runID string) error {
 		cancelAttempt()
 		if ctx.Err() != nil {
 			return ctx.Err()
+		}
+		if runCtx.Err() != nil {
+			return nil
 		}
 		if errors.Is(attemptContextErr, context.DeadlineExceeded) && !errors.Is(executeErr, ErrRuntimePanic) {
 			executeErr = fmt.Errorf("%w: attempt %d exceeded %s", ErrAttemptTimeout, run.Attempt, e.retry.AttemptTimeout)
@@ -212,6 +257,9 @@ func (e *Engine) execute(ctx context.Context, runID string) error {
 				return err
 			}
 			if err := e.store.UpdateRun(ctx, run); err != nil {
+				if errors.Is(err, store.ErrRunCanceled) {
+					return nil
+				}
 				return fmt.Errorf("persist completed run: %w", err)
 			}
 			e.publish(run.ID, "run.succeeded", "run completed successfully")
@@ -223,10 +271,15 @@ func (e *Engine) execute(ctx context.Context, runID string) error {
 
 		backoff := e.backoff(run.Attempt)
 		e.publish(run.ID, "run.retrying", fmt.Sprintf("attempt %d failed; retrying in %s: %v", run.Attempt, backoff, executeErr))
+		retryTimer := time.NewTimer(backoff)
 		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(backoff):
+		case <-runCtx.Done():
+			retryTimer.Stop()
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return nil
+		case <-retryTimer.C:
 		}
 	}
 }
@@ -253,6 +306,9 @@ func (e *Engine) failRun(ctx context.Context, run domain.Run, err error) error {
 		return transitionErr
 	}
 	if updateErr := e.store.UpdateRun(ctx, run); updateErr != nil {
+		if errors.Is(updateErr, store.ErrRunCanceled) {
+			return nil
+		}
 		return fmt.Errorf("persist failed run: %w", updateErr)
 	}
 	e.publish(run.ID, "run.failed", err.Error())

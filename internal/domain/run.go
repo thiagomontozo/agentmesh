@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"errors"
 	"fmt"
 	"time"
 )
@@ -12,7 +13,10 @@ const (
 	RunRunning   RunStatus = "running"
 	RunSucceeded RunStatus = "succeeded"
 	RunFailed    RunStatus = "failed"
+	RunCanceled  RunStatus = "canceled"
 )
+
+var ErrRunNotCancelable = errors.New("run cannot be canceled")
 
 type Run struct {
 	ID          string     `json:"id"`
@@ -76,6 +80,18 @@ func (r *Run) Fail(err error, at time.Time) error {
 	r.Status = RunFailed
 	r.Output = ""
 	r.Error = err.Error()
+	r.CompletedAt = &at
+	return nil
+}
+
+func (r *Run) Cancel(at time.Time) error {
+	if r.Status != RunQueued && r.Status != RunRunning {
+		return fmt.Errorf("%w from status %s", ErrRunNotCancelable, r.Status)
+	}
+	at = at.UTC()
+	r.Status = RunCanceled
+	r.Output = ""
+	r.Error = ""
 	r.CompletedAt = &at
 	return nil
 }

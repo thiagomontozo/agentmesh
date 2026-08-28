@@ -39,3 +39,7 @@ JetStream provides at-least-once delivery. Duplicate delivery is expected after 
 ## A run fails with `runtime panic`
 
 AgentMesh recovered a panic raised inside `Runtime.Execute`. Search structured logs for `runtime panic recovered` and the matching `run_id`; the record includes `agent_id`, `attempt`, panic value, and stack trace. The Run follows normal retry and DLQ policy. Fix the runtime implementation rather than treating recovery as successful execution. `worker_id` is not currently available because queue handlers do not propagate it to the Engine.
+
+## A canceled Run is still active on another replica
+
+The `canceled` state is durable and stale workers cannot replace it, but active context cancellation is process-local. If the API request reached a different replica from the worker, the external call may remain active until it returns or reaches `AGENTMESH_ATTEMPT_TIMEOUT`; its result is discarded. Use Agent Protocol idempotency to control side effects. Cross-replica cancellation signaling remains pending.

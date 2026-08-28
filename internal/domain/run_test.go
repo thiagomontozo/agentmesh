@@ -42,3 +42,27 @@ func TestRunCanFailWhileQueued(t *testing.T) {
 		t.Fatalf("unexpected failed state: %+v", run)
 	}
 }
+
+func TestRunCanBeCanceledWhileQueuedOrRunning(t *testing.T) {
+	for _, status := range []RunStatus{RunQueued, RunRunning} {
+		t.Run(string(status), func(t *testing.T) {
+			run := Run{Status: status, Output: "stale", Error: "stale"}
+			at := time.Date(2026, time.August, 28, 10, 0, 0, 0, time.FixedZone("test", -3*60*60))
+			if err := run.Cancel(at); err != nil {
+				t.Fatal(err)
+			}
+			if run.Status != RunCanceled || run.Output != "" || run.Error != "" || run.CompletedAt == nil || run.CompletedAt.Location() != time.UTC {
+				t.Fatalf("unexpected canceled Run: %+v", run)
+			}
+		})
+	}
+}
+
+func TestRunRejectsCancelFromTerminalState(t *testing.T) {
+	for _, status := range []RunStatus{RunSucceeded, RunFailed, RunCanceled} {
+		run := Run{Status: status}
+		if err := run.Cancel(time.Now()); !errors.Is(err, ErrRunNotCancelable) {
+			t.Fatalf("status %s: expected ErrRunNotCancelable, got %v", status, err)
+		}
+	}
+}

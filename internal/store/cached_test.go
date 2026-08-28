@@ -106,3 +106,27 @@ func TestCachedRepositoryFallsBackWhenCacheReadFails(t *testing.T) {
 		t.Fatalf("unexpected fallback: agent=%+v err=%v", loaded, err)
 	}
 }
+
+func TestCachedRepositoryPreservesCanceledRunAgainstStaleWriter(t *testing.T) {
+	ctx := context.Background()
+	inner := NewMemory()
+	cache := newFakeCache()
+	repository := NewCached(inner, cache, time.Minute)
+	original := domain.Run{ID: "run_1", Status: domain.RunRunning, Attempt: 1, MaxAttempts: 3}
+	if _, _, err := repository.CreateRun(ctx, original, ""); err != nil {
+		t.Fatal(err)
+	}
+	canceled, err := repository.CancelRun(ctx, original.ID, time.Now())
+	if err != nil || canceled.Status != domain.RunCanceled {
+		t.Fatalf("unexpected cancellation: run=%+v err=%v", canceled, err)
+	}
+	stale := original
+	stale.Status = domain.RunSucceeded
+	if err := repository.UpdateRun(ctx, stale); !errors.Is(err, ErrRunCanceled) {
+		t.Fatalf("expected ErrRunCanceled, got %v", err)
+	}
+	loaded, err := repository.GetRun(ctx, original.ID)
+	if err != nil || loaded.Status != domain.RunCanceled {
+		t.Fatalf("cache did not preserve canceled state: run=%+v err=%v", loaded, err)
+	}
+}

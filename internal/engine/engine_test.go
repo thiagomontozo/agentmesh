@@ -198,6 +198,134 @@ func TestEngineRecoversRuntimePanicAndWorkerContinues(t *testing.T) {
 	}
 }
 
+func TestEngineCancelsQueuedRunBeforeExecution(t *testing.T) {
+	var calls atomic.Int32
+	executor := executorFunc(func(context.Context, domain.Agent, string) (string, error) {
+		calls.Add(1)
+		return "unexpected", nil
+	})
+	memory := store.NewMemory()
+	memoryQueue := queue.NewMemory(4)
+	bus := events.NewBus()
+	runEngine := New(memory, bus, executor, memoryQueue, coordination.NewMemory(), 1, testRetryPolicy(3))
+	createTestData(t, memory, 3)
+	if err := runEngine.Enqueue(context.Background(), "run_1"); err != nil {
+		t.Fatal(err)
+	}
+	canceled, err := runEngine.Cancel(context.Background(), "run_1")
+	if err != nil || canceled.Status != domain.RunCanceled || canceled.Attempt != 0 {
+		t.Fatalf("unexpected queued cancellation: run=%+v err=%v", canceled, err)
+	}
+
+	ctx, stop := context.WithCancel(context.Background())
+	runEngine.Start(ctx)
+	defer func() {
+		stop()
+		runEngine.Stop()
+	}()
+	time.Sleep(30 * time.Millisecond)
+	if calls.Load() != 0 {
+		t.Fatalf("canceled queued Run executed %d times", calls.Load())
+	}
+	loaded, err := memory.GetRun(context.Background(), "run_1")
+	if err != nil || loaded.Status != domain.RunCanceled {
+		t.Fatalf("queued cancellation was not preserved: run=%+v err=%v", loaded, err)
+	}
+	assertRunEventTypes(t, bus, loaded.ID, "run.canceled")
+}
+
+func TestEngineCancelsRunningContextAndStopsRetries(t *testing.T) {
+	started := make(chan struct{})
+	contextCanceled := make(chan struct{})
+	var calls atomic.Int32
+	executor := executorFunc(func(ctx context.Context, _ domain.Agent, _ string) (string, error) {
+		if calls.Add(1) == 1 {
+			close(started)
+		}
+		<-ctx.Done()
+		close(contextCanceled)
+		return "", ctx.Err()
+	})
+	policy := testRetryPolicy(3)
+	policy.InitialBackoff = 5 * time.Millisecond
+	memory, _, bus, runEngine := newEngineTestWithPolicy(t, executor, policy)
+	enqueueTestRun(t, memory, runEngine)
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for running execution")
+	}
+
+	canceled, err := runEngine.Cancel(context.Background(), "run_1")
+	if err != nil || canceled.Status != domain.RunCanceled || canceled.Attempt != 1 {
+		t.Fatalf("unexpected running cancellation: run=%+v err=%v", canceled, err)
+	}
+	select {
+	case <-contextCanceled:
+	case <-time.After(time.Second):
+		t.Fatal("runtime context was not canceled")
+	}
+	time.Sleep(30 * time.Millisecond)
+	if calls.Load() != 1 {
+		t.Fatalf("canceled Run retried %d times", calls.Load())
+	}
+	loaded, err := memory.GetRun(context.Background(), "run_1")
+	if err != nil || loaded.Status != domain.RunCanceled || loaded.Error != "" {
+		t.Fatalf("running cancellation was not preserved: run=%+v err=%v", loaded, err)
+	}
+	assertRunEventTypes(t, bus, loaded.ID, "run.started", "run.canceled")
+}
+
+func TestRemoteReplicaCancellationCannotBeOverwrittenByStaleWorker(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	executionReturned := make(chan struct{})
+	executor := executorFunc(func(context.Context, domain.Agent, string) (string, error) {
+		close(started)
+		<-release
+		close(executionReturned)
+		return "stale success", nil
+	})
+	memory := store.NewMemory()
+	sharedCoordinator := coordination.NewMemory()
+	workerQueue := queue.NewMemory(4)
+	workerEngine := New(memory, events.NewBus(), executor, workerQueue, sharedCoordinator, 1, testRetryPolicy(1))
+	apiReplicaEngine := New(
+		memory, events.NewBus(), DemoExecutor{}, queue.NewMemory(1), sharedCoordinator, 1, testRetryPolicy(1),
+	)
+	ctx, stop := context.WithCancel(context.Background())
+	workerEngine.Start(ctx)
+	defer func() {
+		stop()
+		workerEngine.Stop()
+	}()
+	createTestData(t, memory, 1)
+	if err := workerEngine.Enqueue(ctx, "run_1"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for replica A")
+	}
+
+	canceled, err := apiReplicaEngine.Cancel(context.Background(), "run_1")
+	if err != nil || canceled.Status != domain.RunCanceled {
+		t.Fatalf("replica B cancellation failed: run=%+v err=%v", canceled, err)
+	}
+	close(release)
+	select {
+	case <-executionReturned:
+	case <-time.After(time.Second):
+		t.Fatal("replica A runtime did not return")
+	}
+	waitForReleasedLease(t, sharedCoordinator, "run:run_1")
+	loaded, err := memory.GetRun(context.Background(), "run_1")
+	if err != nil || loaded.Status != domain.RunCanceled || loaded.Output != "" {
+		t.Fatalf("stale replica overwrote canceled Run: run=%+v err=%v", loaded, err)
+	}
+}
+
 func TestEnginePassesAttemptContextThroughResolvedRuntime(t *testing.T) {
 	requests := make(chan agentruntime.ExecutionRequest, 1)
 	implementation := resolvedRuntimeFunc(func(_ context.Context, request agentruntime.ExecutionRequest) (agentruntime.ExecutionResult, error) {

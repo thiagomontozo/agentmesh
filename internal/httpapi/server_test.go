@@ -295,6 +295,74 @@ func TestRejectsMultipleJSONObjects(t *testing.T) {
 	}
 }
 
+func TestCancelRunEndpoint(t *testing.T) {
+	memory := store.NewMemory()
+	bus := events.NewBus()
+	runEngine := engine.New(
+		memory, bus, engine.DemoExecutor{}, queue.NewMemory(4), coordination.NewMemory(), 1,
+		engine.RetryPolicy{MaxAttempts: 3, InitialBackoff: time.Millisecond, MaxBackoff: time.Millisecond, LeaseTTL: time.Minute},
+	)
+	server := New(memory, runEngine, bus)
+	for _, run := range []domain.Run{
+		{ID: "run_queued", Status: domain.RunQueued, MaxAttempts: 3},
+		{ID: "run_succeeded", Status: domain.RunSucceeded, MaxAttempts: 3},
+	} {
+		if _, _, err := memory.CreateRun(context.Background(), run, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/runs/run_queued/cancel", nil)
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", response.Code, response.Body.String())
+	}
+	var canceled domain.Run
+	if err := json.Unmarshal(response.Body.Bytes(), &canceled); err != nil {
+		t.Fatal(err)
+	}
+	if canceled.Status != domain.RunCanceled || canceled.CompletedAt == nil {
+		t.Fatalf("unexpected canceled response: %+v", canceled)
+	}
+	assertServerEventTypes(t, bus, canceled.ID, "run.canceled")
+
+	for _, test := range []struct {
+		name       string
+		runID      string
+		wantStatus int
+	}{
+		{name: "already canceled", runID: "run_queued", wantStatus: http.StatusConflict},
+		{name: "succeeded", runID: "run_succeeded", wantStatus: http.StatusConflict},
+		{name: "missing", runID: "missing", wantStatus: http.StatusNotFound},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPost, "/api/v1/runs/"+test.runID+"/cancel", nil)
+			response := httptest.NewRecorder()
+			server.Handler().ServeHTTP(response, request)
+			if response.Code != test.wantStatus {
+				t.Fatalf("expected %d, got %d: %s", test.wantStatus, response.Code, response.Body.String())
+			}
+		})
+	}
+}
+
+func assertServerEventTypes(t *testing.T, bus *events.Bus, runID string, expected ...string) {
+	t.Helper()
+	eventChannel, unsubscribe := bus.Subscribe(runID)
+	defer unsubscribe()
+	for _, expectedType := range expected {
+		select {
+		case event := <-eventChannel:
+			if event.Type != expectedType {
+				t.Fatalf("expected event %s, got %+v", expectedType, event)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("timed out waiting for event %s", expectedType)
+		}
+	}
+}
+
 func waitForRunStatus(t *testing.T, repository store.Repository, runID string, want domain.RunStatus) {
 	t.Helper()
 	deadline := time.Now().Add(time.Second)

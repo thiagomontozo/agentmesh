@@ -190,6 +190,43 @@ func TestHTTPRuntimePropagatesContextCancellation(t *testing.T) {
 	}
 }
 
+func TestHTTPRuntimeCancellationReachesHTTPRequest(t *testing.T) {
+	requestStarted := make(chan struct{})
+	requestCanceled := make(chan struct{})
+	client := &http.Client{Transport: roundTripperFunc(func(request *http.Request) (*http.Response, error) {
+		close(requestStarted)
+		<-request.Context().Done()
+		close(requestCanceled)
+		return nil, request.Context().Err()
+	})}
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		_, err := executeRemote(ctx, agentruntime.NewHTTPRuntime(client, 0), "http://remote-agent")
+		result <- err
+	}()
+	select {
+	case <-requestStarted:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for HTTP request")
+	}
+	cancel()
+	select {
+	case <-requestCanceled:
+	case <-time.After(time.Second):
+		t.Fatal("HTTP request context was not canceled")
+	}
+	select {
+	case err := <-result:
+		requireHTTPError(t, err, agentruntime.HTTPErrorCanceled, 0)
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected context cancellation, got %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("HTTP runtime did not return after request cancellation")
+	}
+}
+
 func TestHTTPRuntimeDoesNotFollowRedirects(t *testing.T) {
 	var targetCalls atomic.Int32
 	target := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
@@ -272,6 +309,12 @@ func executeRemote(ctx context.Context, runtime agentruntime.Runtime, endpoint s
 		Attempt: 2,
 		Input:   "hello",
 	})
+}
+
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripperFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return f(request)
 }
 
 func statusServer(status int) *httptest.Server {

@@ -78,6 +78,8 @@ Other executor failures use exponential backoff up to `AGENTMESH_RETRY_MAX_BACKO
 
 A panic raised by a runtime or legacy executor is recovered only at the runtime-call boundary. It is logged with execution identifiers and a stack trace, then treated as a normal attempt failure. Repeated panics therefore exhaust `AGENTMESH_MAX_ATTEMPTS`, fail the Run, and reach the DLQ without terminating the worker process.
 
+Queued and running Runs can be canceled through the API. Cancellation is persisted before local execution is interrupted, so a stale completion cannot replace it. With multiple replicas, only an execution owned by the API replica receives immediate context cancellation; another replica continues until its current call returns or times out, then its update is rejected. Distributed signaling is intentionally deferred rather than presenting local-only cancellation as a complete multi-node guarantee.
+
 Runs interrupted by process shutdown remain recoverable. On the next distributed startup, `running` runs are reset to `queued` and queued work is republished using the run ID as its JetStream deduplication key.
 
 ## Production notes

@@ -61,12 +61,20 @@ curl -i -X POST http://localhost:8080/api/v1/runs \
 
 A new run returns `202 Accepted`. Repeating the same key and payload returns `200 OK`, the original run, and `Idempotency-Replayed: true`. Reusing a key with a different payload returns `409 Conflict`.
 
-Run status progresses through `queued`, `running`, and either `succeeded` or `failed`. The response includes `attempt`, `max_attempts`, and lifecycle timestamps.
+Run status progresses through `queued`, `running`, and a terminal state: `succeeded`, `failed`, or `canceled`. The response includes `attempt`, `max_attempts`, and lifecycle timestamps.
 
 ```bash
 curl http://localhost:8080/api/v1/runs
 curl http://localhost:8080/api/v1/runs/run_REPLACE_ME
 ```
+
+Cancel a queued or running Run:
+
+```bash
+curl -X POST http://localhost:8080/api/v1/runs/run_REPLACE_ME/cancel
+```
+
+Successful cancellation returns the canceled Run with `200 OK`. A terminal Run returns `409 Conflict`; an unknown Run returns `404 Not Found`. Cancellation clears output/error, records `completed_at`, stops local execution context, and prevents further retries. In multi-replica mode, persisted cancellation cannot be overwritten by a stale worker, but immediate interruption is limited to a worker in the same process until distributed cancellation signaling exists.
 
 ## Server-Sent Events
 
@@ -84,6 +92,7 @@ Typical event names are:
 - `run.attempt_timed_out`
 - `run.succeeded`
 - `run.failed`
+- `run.canceled`
 
 The stream closes after a terminal event. The current event history is bounded and process-local; PostgreSQL remains the source of truth for final run state.
 

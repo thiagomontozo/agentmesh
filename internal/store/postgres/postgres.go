@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"sort"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -192,7 +193,7 @@ func (r *Repository) UpdateRun(ctx context.Context, run domain.Run) error {
 	command, err := r.pool.Exec(ctx, `
 		UPDATE runs SET output = $2, status = $3, error = $4, attempt = $5,
 			max_attempts = $6, started_at = $7, completed_at = $8
-		WHERE id = $1`,
+		WHERE id = $1 AND status <> 'canceled'`,
 		run.ID, run.Output, run.Status, run.Error, run.Attempt, run.MaxAttempts,
 		run.StartedAt, run.CompletedAt,
 	)
@@ -200,9 +201,35 @@ func (r *Repository) UpdateRun(ctx context.Context, run domain.Run) error {
 		return fmt.Errorf("update run: %w", err)
 	}
 	if command.RowsAffected() == 0 {
-		return store.ErrNotFound
+		existing, getErr := r.GetRun(ctx, run.ID)
+		if getErr != nil {
+			return getErr
+		}
+		if existing.Status == domain.RunCanceled {
+			return store.ErrRunCanceled
+		}
+		return fmt.Errorf("update run affected no rows")
 	}
 	return nil
+}
+
+func (r *Repository) CancelRun(ctx context.Context, id string, at time.Time) (domain.Run, error) {
+	run, err := scanRun(r.pool.QueryRow(ctx, `
+		UPDATE runs SET status = 'canceled', output = '', error = '', completed_at = $2
+		WHERE id = $1 AND status IN ('queued', 'running')
+		RETURNING id, agent_id, input, output, status, error, attempt, max_attempts,
+			created_at, started_at, completed_at`, id, at.UTC()))
+	if err == nil {
+		return run, nil
+	}
+	if err != pgx.ErrNoRows {
+		return domain.Run{}, fmt.Errorf("cancel run: %w", err)
+	}
+	existing, getErr := r.GetRun(ctx, id)
+	if getErr != nil {
+		return domain.Run{}, getErr
+	}
+	return existing, fmt.Errorf("%w from status %s", domain.ErrRunNotCancelable, existing.Status)
 }
 
 func (r *Repository) ListRuns(ctx context.Context) ([]domain.Run, error) {
