@@ -40,6 +40,97 @@ func TestEngineCompletesRun(t *testing.T) {
 	}
 }
 
+func TestEngineProvidesAttemptDeadlineToFastRuntime(t *testing.T) {
+	remaining := make(chan time.Duration, 1)
+	executor := executorFunc(func(ctx context.Context, _ domain.Agent, _ string) (string, error) {
+		deadline, ok := ctx.Deadline()
+		if !ok {
+			return "", errors.New("attempt context has no deadline")
+		}
+		remaining <- time.Until(deadline)
+		return "done", nil
+	})
+	policy := testRetryPolicy(1)
+	policy.AttemptTimeout = 500 * time.Millisecond
+	memory, _, _, runEngine := newEngineTestWithPolicy(t, executor, policy)
+	enqueueTestRun(t, memory, runEngine)
+
+	waitForStatus(t, memory, "run_1", domain.RunSucceeded)
+	observed := <-remaining
+	if observed <= 0 || observed > policy.AttemptTimeout {
+		t.Fatalf("unexpected attempt deadline: remaining=%s timeout=%s", observed, policy.AttemptTimeout)
+	}
+}
+
+func TestEngineFailsRunWhenAttemptTimesOut(t *testing.T) {
+	executor := executorFunc(func(ctx context.Context, _ domain.Agent, _ string) (string, error) {
+		<-ctx.Done()
+		return "", ctx.Err()
+	})
+	policy := testRetryPolicy(1)
+	policy.AttemptTimeout = 20 * time.Millisecond
+	memory, memoryQueue, bus, runEngine := newEngineTestWithPolicy(t, executor, policy)
+	enqueueTestRun(t, memory, runEngine)
+
+	run := waitForStatus(t, memory, "run_1", domain.RunFailed)
+	if run.Attempt != 1 || !strings.Contains(run.Error, ErrAttemptTimeout.Error()) || !strings.Contains(run.Error, policy.AttemptTimeout.String()) {
+		t.Fatalf("unexpected timed out run: %+v", run)
+	}
+	if len(memoryQueue.DeadLetters()) != 1 {
+		t.Fatalf("expected timed out run in dead-letter queue")
+	}
+	assertRunEventTypes(t, bus, run.ID, "run.started", "run.attempt_timed_out", "run.failed")
+}
+
+func TestEngineRejectsSuccessReturnedAfterAttemptDeadline(t *testing.T) {
+	executor := executorFunc(func(ctx context.Context, _ domain.Agent, _ string) (string, error) {
+		<-ctx.Done()
+		return "late success", nil
+	})
+	policy := testRetryPolicy(1)
+	policy.AttemptTimeout = 20 * time.Millisecond
+	memory, _, _, runEngine := newEngineTestWithPolicy(t, executor, policy)
+	enqueueTestRun(t, memory, runEngine)
+
+	run := waitForStatus(t, memory, "run_1", domain.RunFailed)
+	if run.Output != "" || !strings.Contains(run.Error, ErrAttemptTimeout.Error()) {
+		t.Fatalf("late runtime result bypassed attempt timeout: %+v", run)
+	}
+}
+
+func TestEngineDefaultsAttemptTimeoutForLegacyCallers(t *testing.T) {
+	runEngine := New(
+		store.NewMemory(), events.NewBus(), DemoExecutor{}, queue.NewMemory(1), coordination.NewMemory(), 1,
+		RetryPolicy{MaxAttempts: 1, InitialBackoff: time.Millisecond, MaxBackoff: time.Millisecond, LeaseTTL: time.Minute},
+	)
+	if runEngine.retry.AttemptTimeout != DefaultAttemptTimeout {
+		t.Fatalf("expected default attempt timeout %s, got %s", DefaultAttemptTimeout, runEngine.retry.AttemptTimeout)
+	}
+}
+
+func TestEngineRetriesAfterAttemptTimeout(t *testing.T) {
+	var attempts atomic.Int32
+	executor := executorFunc(func(ctx context.Context, _ domain.Agent, _ string) (string, error) {
+		if attempts.Add(1) == 1 {
+			<-ctx.Done()
+			return "", ctx.Err()
+		}
+		return "done", nil
+	})
+	policy := testRetryPolicy(2)
+	policy.AttemptTimeout = 20 * time.Millisecond
+	memory, _, bus, runEngine := newEngineTestWithPolicy(t, executor, policy)
+	enqueueTestRun(t, memory, runEngine)
+
+	run := waitForStatus(t, memory, "run_1", domain.RunSucceeded)
+	if run.Attempt != 2 || run.Output != "done" || attempts.Load() != 2 {
+		t.Fatalf("unexpected run after timeout retry: run=%+v calls=%d", run, attempts.Load())
+	}
+	assertRunEventTypes(t, bus, run.ID,
+		"run.started", "run.attempt_timed_out", "run.retrying", "run.started", "run.succeeded",
+	)
+}
+
 func TestEnginePassesAttemptContextThroughResolvedRuntime(t *testing.T) {
 	requests := make(chan agentruntime.ExecutionRequest, 1)
 	implementation := resolvedRuntimeFunc(func(_ context.Context, request agentruntime.ExecutionRequest) (agentruntime.ExecutionResult, error) {
@@ -149,8 +240,12 @@ func TestEngineLeavesRunningRunRecoverableWhenContextIsCanceled(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for executor to start")
 	}
+	stopStarted := time.Now()
 	cancel()
 	runEngine.Stop()
+	if elapsed := time.Since(stopStarted); elapsed > time.Second {
+		t.Fatalf("Engine.Stop waited %s for a context-aware runtime", elapsed)
+	}
 
 	run, err := memory.GetRun(context.Background(), "run_1")
 	if err != nil {
@@ -236,22 +331,45 @@ func TestEngineLeasePreventsConcurrentDuplicateExecution(t *testing.T) {
 
 func newEngineTest(t *testing.T, executor Executor, maxAttempts int) (*store.Memory, *queue.Memory, *Engine) {
 	t.Helper()
+	memory, memoryQueue, _, runEngine := newEngineTestWithPolicy(t, executor, testRetryPolicy(maxAttempts))
+	return memory, memoryQueue, runEngine
+}
+
+func newEngineTestWithPolicy(t *testing.T, executor Executor, policy RetryPolicy) (*store.Memory, *queue.Memory, *events.Bus, *Engine) {
+	t.Helper()
 	memory := store.NewMemory()
 	memoryQueue := queue.NewMemory(8)
 	bus := events.NewBus()
-	runEngine := New(memory, bus, executor, memoryQueue, coordination.NewMemory(), 1, testRetryPolicy(maxAttempts))
+	runEngine := New(memory, bus, executor, memoryQueue, coordination.NewMemory(), 1, policy)
 	ctx, cancel := context.WithCancel(context.Background())
 	runEngine.Start(ctx)
 	t.Cleanup(func() {
 		cancel()
 		runEngine.Stop()
 	})
-	return memory, memoryQueue, runEngine
+	return memory, memoryQueue, bus, runEngine
 }
 
 func testRetryPolicy(maxAttempts int) RetryPolicy {
 	return RetryPolicy{
-		MaxAttempts: maxAttempts, InitialBackoff: time.Millisecond, MaxBackoff: 2 * time.Millisecond, LeaseTTL: time.Minute,
+		MaxAttempts: maxAttempts, InitialBackoff: time.Millisecond, MaxBackoff: 2 * time.Millisecond,
+		LeaseTTL: time.Minute, AttemptTimeout: DefaultAttemptTimeout,
+	}
+}
+
+func assertRunEventTypes(t *testing.T, bus *events.Bus, runID string, expected ...string) {
+	t.Helper()
+	eventChannel, unsubscribe := bus.Subscribe(runID)
+	defer unsubscribe()
+	for _, expectedType := range expected {
+		select {
+		case event := <-eventChannel:
+			if event.Type != expectedType {
+				t.Fatalf("expected event %s, got %+v", expectedType, event)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("timed out waiting for event %s", expectedType)
+		}
 	}
 }
 

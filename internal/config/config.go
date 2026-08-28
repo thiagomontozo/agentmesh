@@ -13,6 +13,7 @@ type Config struct {
 	Workers         int
 	QueueSize       int
 	ExecutionDelay  time.Duration
+	AttemptTimeout  time.Duration
 	ShutdownTimeout time.Duration
 	DatabaseURL     string
 	NATSURL         string
@@ -49,6 +50,13 @@ func Load() (Config, error) {
 	executionDelay, err := durationEnv("AGENTMESH_EXECUTION_DELAY", 750*time.Millisecond)
 	if err != nil {
 		return Config{}, err
+	}
+	attemptTimeout, err := durationEnv("AGENTMESH_ATTEMPT_TIMEOUT", 30*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+	if attemptTimeout <= 0 {
+		return Config{}, fmt.Errorf("AGENTMESH_ATTEMPT_TIMEOUT must be > 0")
 	}
 
 	shutdownTimeout, err := durationEnv("AGENTMESH_SHUTDOWN_TIMEOUT", 10*time.Second)
@@ -108,6 +116,7 @@ func Load() (Config, error) {
 		Workers:         workers,
 		QueueSize:       queueSize,
 		ExecutionDelay:  executionDelay,
+		AttemptTimeout:  attemptTimeout,
 		ShutdownTimeout: shutdownTimeout,
 		DatabaseURL:     databaseURL,
 		NATSURL:         natsURL,

@@ -29,7 +29,12 @@ type RetryPolicy struct {
 	InitialBackoff time.Duration
 	MaxBackoff     time.Duration
 	LeaseTTL       time.Duration
+	AttemptTimeout time.Duration
 }
+
+const DefaultAttemptTimeout = 30 * time.Second
+
+var ErrAttemptTimeout = errors.New("run attempt timed out")
 
 func (d DemoExecutor) Execute(ctx context.Context, agent domain.Agent, input string) (string, error) {
 	timer := time.NewTimer(d.Delay)
@@ -62,6 +67,9 @@ func New(s store.Repository, bus *events.Bus, executor Executor, q queue.Queue, 
 }
 
 func NewWithResolver(s store.Repository, bus *events.Bus, resolver agentruntime.Resolver, q queue.Queue, coord coordination.Coordinator, workers int, retry RetryPolicy) *Engine {
+	if retry.AttemptTimeout <= 0 {
+		retry.AttemptTimeout = DefaultAttemptTimeout
+	}
 	return &Engine{
 		store:    s,
 		events:   bus,
@@ -184,9 +192,19 @@ func (e *Engine) execute(ctx context.Context, runID string) error {
 		}
 		e.publish(run.ID, "run.started", fmt.Sprintf("attempt %d of %d started", run.Attempt, run.MaxAttempts))
 
-		result, executeErr := implementation.Execute(ctx, agentruntime.ExecutionRequest{
+		attemptCtx, cancelAttempt := context.WithTimeout(ctx, e.retry.AttemptTimeout)
+		result, executeErr := implementation.Execute(attemptCtx, agentruntime.ExecutionRequest{
 			RunID: run.ID, Agent: agent, Attempt: run.Attempt, Input: run.Input,
 		})
+		attemptContextErr := attemptCtx.Err()
+		cancelAttempt()
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if errors.Is(attemptContextErr, context.DeadlineExceeded) {
+			executeErr = fmt.Errorf("%w: attempt %d exceeded %s", ErrAttemptTimeout, run.Attempt, e.retry.AttemptTimeout)
+			e.publish(run.ID, "run.attempt_timed_out", executeErr.Error())
+		}
 		if executeErr == nil {
 			if err := run.Succeed(result.Output, time.Now()); err != nil {
 				return err
@@ -196,9 +214,6 @@ func (e *Engine) execute(ctx context.Context, runID string) error {
 			}
 			e.publish(run.ID, "run.succeeded", "run completed successfully")
 			return nil
-		}
-		if errors.Is(executeErr, context.Canceled) || errors.Is(executeErr, context.DeadlineExceeded) {
-			return executeErr
 		}
 		if run.Attempt >= run.MaxAttempts {
 			return e.failRun(ctx, run, executeErr)

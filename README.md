@@ -68,6 +68,7 @@ The Engine resolves the already-selected Agent's runtime through a concurrency-s
 - Redis read-through cache with graceful database fallback
 - Idempotent run creation through `Idempotency-Key`
 - Configurable retry with exponential backoff
+- Configurable per-attempt execution timeout
 - Restart recovery for queued/running work
 
 ## API
@@ -134,6 +135,7 @@ With the server running in one terminal:
 | `AGENTMESH_WORKERS` | `4` | Worker goroutines |
 | `AGENTMESH_QUEUE_SIZE` | `128` | In-memory run queue capacity |
 | `AGENTMESH_EXECUTION_DELAY` | `750ms` | Demo executor latency |
+| `AGENTMESH_ATTEMPT_TIMEOUT` | `30s` | Maximum duration of each execution attempt |
 | `AGENTMESH_SHUTDOWN_TIMEOUT` | `10s` | HTTP graceful-shutdown timeout |
 | `AGENTMESH_MAX_ATTEMPTS` | `3` | Executor attempts before dead-lettering |
 | `AGENTMESH_RETRY_INITIAL_BACKOFF` | `250ms` | Initial retry delay |

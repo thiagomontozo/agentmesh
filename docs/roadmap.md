@@ -24,6 +24,7 @@
 - [x] Agent Protocol V1
 - [x] Remote HTTP runtime
 - [x] Multi-Agent HTTP interoperability test
+- [x] Per-attempt runtime timeout
 - [ ] LLM provider interface
 - [ ] OpenAI-compatible provider
 - [ ] MCP client and tool registry
