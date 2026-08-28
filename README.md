@@ -69,6 +69,7 @@ The Engine resolves the already-selected Agent's runtime through a concurrency-s
 - Idempotent run creation through `Idempotency-Key`
 - Configurable retry with exponential backoff
 - Configurable per-attempt execution timeout
+- Runtime panic isolation at the execution boundary
 - Restart recovery for queued/running work
 
 ## API

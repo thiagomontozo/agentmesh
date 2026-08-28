@@ -1,8 +1,10 @@
 package engine
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -129,6 +131,71 @@ func TestEngineRetriesAfterAttemptTimeout(t *testing.T) {
 	assertRunEventTypes(t, bus, run.ID,
 		"run.started", "run.attempt_timed_out", "run.retrying", "run.started", "run.succeeded",
 	)
+}
+
+func TestEngineRecoversRuntimePanicAndWorkerContinues(t *testing.T) {
+	var logOutput bytes.Buffer
+	originalLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logOutput, nil)))
+	defer slog.SetDefault(originalLogger)
+
+	executor := executorFunc(func(_ context.Context, _ domain.Agent, input string) (string, error) {
+		if input == "panic" {
+			panic("executor exploded")
+		}
+		return "worker survived", nil
+	})
+	memory := store.NewMemory()
+	memoryQueue := queue.NewMemory(8)
+	coordinator := coordination.NewMemory()
+	runEngine := New(memory, events.NewBus(), executor, memoryQueue, coordinator, 1, testRetryPolicy(1))
+	ctx, cancel := context.WithCancel(context.Background())
+	runEngine.Start(ctx)
+	defer func() {
+		cancel()
+		runEngine.Stop()
+	}()
+
+	if _, err := memory.CreateAgent(ctx, domain.Agent{ID: "agt_1", Name: "panic-test"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, run := range []domain.Run{
+		{ID: "run_panic", AgentID: "agt_1", Input: "panic", Status: domain.RunQueued, MaxAttempts: 1},
+		{ID: "run_next", AgentID: "agt_1", Input: "healthy", Status: domain.RunQueued, MaxAttempts: 1},
+	} {
+		if _, _, err := memory.CreateRun(ctx, run, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := runEngine.Enqueue(ctx, "run_panic"); err != nil {
+		t.Fatal(err)
+	}
+	failed := waitForStatus(t, memory, "run_panic", domain.RunFailed)
+	if failed.Attempt != 1 || !strings.Contains(failed.Error, ErrRuntimePanic.Error()) || !strings.Contains(failed.Error, "executor exploded") {
+		t.Fatalf("panic was not converted to a controlled Run failure: %+v", failed)
+	}
+	waitForReleasedLease(t, coordinator, "run:run_panic")
+	if len(memoryQueue.DeadLetters()) != 1 {
+		t.Fatalf("expected panic Run in dead-letter queue")
+	}
+
+	if err := runEngine.Enqueue(ctx, "run_next"); err != nil {
+		t.Fatal(err)
+	}
+	completed := waitForStatus(t, memory, "run_next", domain.RunSucceeded)
+	if completed.Output != "worker survived" {
+		t.Fatalf("worker did not process the next Run: %+v", completed)
+	}
+
+	logs := logOutput.String()
+	for _, expected := range []string{
+		`"msg":"runtime panic recovered"`, `"run_id":"run_panic"`, `"agent_id":"agt_1"`,
+		`"attempt":1`, `"panic":"executor exploded"`, `"stack":`,
+	} {
+		if !strings.Contains(logs, expected) {
+			t.Fatalf("panic log is missing %s: %s", expected, logs)
+		}
+	}
 }
 
 func TestEnginePassesAttemptContextThroughResolvedRuntime(t *testing.T) {
@@ -371,6 +438,25 @@ func assertRunEventTypes(t *testing.T, bus *events.Bus, runID string, expected .
 			t.Fatalf("timed out waiting for event %s", expectedType)
 		}
 	}
+}
+
+func waitForReleasedLease(t *testing.T, coordinator coordination.Coordinator, key string) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		lease, acquired, err := coordinator.Acquire(context.Background(), key, time.Minute)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if acquired {
+			if err := lease.Release(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("lease %s was not released after panic", key)
 }
 
 func enqueueTestRun(t *testing.T, memory *store.Memory, runEngine *Engine) {
