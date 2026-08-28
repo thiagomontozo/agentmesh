@@ -8,6 +8,22 @@ Agent definitions can optionally declare `runtime`, `protocol`, `endpoint`, and 
 
 The current engine behavior is intentionally unchanged: execution metadata is persisted and exposed by the API, but it is not resolved or invoked yet.
 
+## Runtime contract
+
+`internal/runtime` defines the runtime-facing boundary for one execution attempt:
+
+```text
+ExecutionRequest (Run ID, Agent, Attempt, Input)
+        ↓
+Runtime.Execute(context.Context, request)
+        ↓
+ExecutionResult (Output) or error
+```
+
+`Agent.ID` is the single source of truth for the Agent ID inside the request. The package also provides `AdaptLegacy`, which wraps executors using the current `engine.Executor` method shape. This keeps `DemoExecutor` compatible while avoiding an import dependency from the runtime package to the engine.
+
+The Engine still invokes its existing low-level `Executor` directly. Runtime resolution is deliberately not part of this stage and will be introduced separately.
+
 ## Memory mode
 
 Memory mode is the default. It uses a mutex-protected repository and bounded Go channel, requires no external services, and is intended for development and unit tests. State is process-local.

@@ -168,6 +168,7 @@ cmd/agentmesh/          application entrypoint
 internal/config/        environment configuration
 internal/domain/        core domain models
 internal/engine/        queue, workers and executor abstraction
+internal/runtime/       runtime request/result contract and legacy adapter
 internal/events/        in-process event bus
 internal/httpapi/       REST + SSE transport
 internal/queue/         memory and NATS JetStream queues
