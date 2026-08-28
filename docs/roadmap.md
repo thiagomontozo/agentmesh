@@ -26,6 +26,7 @@
 - [x] Multi-Agent HTTP interoperability test
 - [x] Per-attempt runtime timeout
 - [x] Runtime panic isolation
+- [x] Persisted Run cancellation with stale-writer protection
 - [ ] LLM provider interface
 - [ ] OpenAI-compatible provider
 - [ ] MCP client and tool registry

@@ -107,6 +107,39 @@ func TestMemoryUpdateMissingRun(t *testing.T) {
 	}
 }
 
+func TestMemoryCancelsRunAndRejectsStaleUpdate(t *testing.T) {
+	ctx := context.Background()
+	memory := NewMemory()
+	original := domain.Run{ID: "run_1", Status: domain.RunRunning, Attempt: 1, MaxAttempts: 3}
+	if _, _, err := memory.CreateRun(ctx, original, ""); err != nil {
+		t.Fatal(err)
+	}
+	canceled, err := memory.CancelRun(ctx, original.ID, time.Now())
+	if err != nil || canceled.Status != domain.RunCanceled || canceled.CompletedAt == nil {
+		t.Fatalf("unexpected cancellation: run=%+v err=%v", canceled, err)
+	}
+
+	stale := original
+	stale.Status = domain.RunSucceeded
+	stale.Output = "must not win"
+	if err := memory.UpdateRun(ctx, stale); !errors.Is(err, ErrRunCanceled) {
+		t.Fatalf("expected ErrRunCanceled, got %v", err)
+	}
+	loaded, err := memory.GetRun(ctx, original.ID)
+	if err != nil || loaded.Status != domain.RunCanceled || loaded.Output != "" {
+		t.Fatalf("stale update replaced cancellation: run=%+v err=%v", loaded, err)
+	}
+	if _, err := memory.CancelRun(ctx, original.ID, time.Now()); !errors.Is(err, domain.ErrRunNotCancelable) {
+		t.Fatalf("expected terminal cancellation conflict, got %v", err)
+	}
+}
+
+func TestMemoryCancelMissingRun(t *testing.T) {
+	if _, err := NewMemory().CancelRun(context.Background(), "missing", time.Now()); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound, got %v", err)
+	}
+}
+
 func TestMemoryCreateRunIsIdempotent(t *testing.T) {
 	ctx := context.Background()
 	memory := NewMemory()

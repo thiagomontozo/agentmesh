@@ -54,7 +54,7 @@ The Engine resolves the already-selected Agent's runtime through a concurrency-s
 - Remote HTTP Agent execution through Agent Protocol V1
 - Asynchronous run submission
 - Configurable concurrent worker pool
-- Explicit run state machine: `queued → running → succeeded/failed`
+- Explicit run state machine: `queued → running → succeeded/failed/canceled`
 - Server-Sent Events (SSE) for lifecycle events
 - Graceful shutdown
 - Environment-based configuration
@@ -70,6 +70,7 @@ The Engine resolves the already-selected Agent's runtime through a concurrency-s
 - Configurable retry with exponential backoff
 - Configurable per-attempt execution timeout
 - Runtime panic isolation at the execution boundary
+- Explicit cancellation for queued and running Runs
 - Restart recovery for queued/running work
 
 ## API
@@ -84,6 +85,7 @@ The Engine resolves the already-selected Agent's runtime through a concurrency-s
 | `POST` | `/api/v1/runs` | Submit a run |
 | `GET` | `/api/v1/runs` | List runs |
 | `GET` | `/api/v1/runs/{id}` | Get run status/result |
+| `POST` | `/api/v1/runs/{id}/cancel` | Cancel a queued or running Run |
 | `GET` | `/api/v1/runs/{id}/events` | Stream lifecycle events via SSE |
 
 ## Run locally

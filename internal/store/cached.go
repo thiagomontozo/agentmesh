@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -78,10 +79,21 @@ func (c *Cached) GetRun(ctx context.Context, id string) (domain.Run, error) {
 
 func (c *Cached) UpdateRun(ctx context.Context, run domain.Run) error {
 	if err := c.inner.UpdateRun(ctx, run); err != nil {
+		if errors.Is(err, ErrRunCanceled) {
+			c.delete(ctx, runKey(run.ID))
+		}
 		return err
 	}
 	c.set(ctx, runKey(run.ID), run)
 	return nil
+}
+
+func (c *Cached) CancelRun(ctx context.Context, id string, at time.Time) (domain.Run, error) {
+	run, err := c.inner.CancelRun(ctx, id, at)
+	if run.ID != "" {
+		c.set(ctx, runKey(run.ID), run)
+	}
+	return run, err
 }
 
 func (c *Cached) ListRuns(ctx context.Context) ([]domain.Run, error) {
@@ -119,6 +131,12 @@ func runKey(id string) string   { return "agentmesh:run:" + id }
 func (c *Cached) set(ctx context.Context, key string, value any) {
 	if err := c.cache.Set(ctx, key, value, c.ttl); err != nil {
 		slog.Warn("cache write failed", "key", key, "error", err)
+	}
+}
+
+func (c *Cached) delete(ctx context.Context, keys ...string) {
+	if err := c.cache.Delete(ctx, keys...); err != nil {
+		slog.Warn("cache invalidation failed", "error", err)
 	}
 }
 

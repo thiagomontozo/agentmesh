@@ -45,6 +45,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/runs", s.listRuns)
 	s.mux.HandleFunc("POST /api/v1/runs", s.createRun)
 	s.mux.HandleFunc("GET /api/v1/runs/{id}", s.getRun)
+	s.mux.HandleFunc("POST /api/v1/runs/{id}/cancel", s.cancelRun)
 	s.mux.HandleFunc("GET /api/v1/runs/{id}/events", s.runEvents)
 }
 
@@ -224,6 +225,23 @@ func (s *Server) getRun(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, run)
 }
 
+func (s *Server) cancelRun(w http.ResponseWriter, r *http.Request) {
+	run, err := s.engine.Cancel(r.Context(), r.PathValue("id"))
+	if errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "run not found")
+		return
+	}
+	if errors.Is(err, domain.ErrRunNotCancelable) {
+		writeError(w, http.StatusConflict, fmt.Sprintf("run in status %s cannot be canceled", run.Status))
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not cancel run")
+		return
+	}
+	writeJSON(w, http.StatusOK, run)
+}
+
 func (s *Server) runEvents(w http.ResponseWriter, r *http.Request) {
 	runID := r.PathValue("id")
 	if _, err := s.store.GetRun(r.Context(), runID); errors.Is(err, store.ErrNotFound) {
@@ -258,7 +276,7 @@ func (s *Server) runEvents(w http.ResponseWriter, r *http.Request) {
 			}
 			_, _ = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event.Type, payload)
 			flusher.Flush()
-			if event.Type == "run.succeeded" || event.Type == "run.failed" {
+			if event.Type == "run.succeeded" || event.Type == "run.failed" || event.Type == "run.canceled" {
 				return
 			}
 		}

@@ -4,6 +4,7 @@ package integration
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"slices"
@@ -111,6 +112,27 @@ func TestDistributedRunLifecycleAndIdempotency(t *testing.T) {
 	}
 	if err := runEngine.Ready(ctx); err != nil {
 		t.Fatal(err)
+	}
+
+	cancelCandidate := domain.Run{
+		ID: "run_cancel_" + suffix, AgentID: agent.ID, Input: "cancel", Status: domain.RunQueued,
+		MaxAttempts: 3, CreatedAt: time.Now().UTC(),
+	}
+	if _, _, err := repository.CreateRun(ctx, cancelCandidate, ""); err != nil {
+		t.Fatal(err)
+	}
+	canceled, err := repository.CancelRun(ctx, cancelCandidate.ID, time.Now())
+	if err != nil || canceled.Status != domain.RunCanceled {
+		t.Fatalf("cancel PostgreSQL Run: run=%+v err=%v", canceled, err)
+	}
+	stale := cancelCandidate
+	stale.Status = domain.RunSucceeded
+	stale.Output = "must not win"
+	if err := repository.UpdateRun(ctx, stale); !errors.Is(err, store.ErrRunCanceled) {
+		t.Fatalf("expected stale PostgreSQL update to fail with ErrRunCanceled, got %v", err)
+	}
+	if _, err := repository.CancelRun(ctx, cancelCandidate.ID, time.Now()); !errors.Is(err, domain.ErrRunNotCancelable) {
+		t.Fatalf("expected repeated cancel conflict, got %v", err)
 	}
 }
 

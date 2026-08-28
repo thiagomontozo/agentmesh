@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/thiagomontozo/agentmesh/internal/domain"
 )
@@ -85,11 +86,29 @@ func (m *Memory) GetRun(_ context.Context, id string) (domain.Run, error) {
 func (m *Memory) UpdateRun(_ context.Context, run domain.Run) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if _, ok := m.runs[run.ID]; !ok {
+	existing, ok := m.runs[run.ID]
+	if !ok {
 		return ErrNotFound
+	}
+	if existing.Status == domain.RunCanceled {
+		return ErrRunCanceled
 	}
 	m.runs[run.ID] = run
 	return nil
+}
+
+func (m *Memory) CancelRun(_ context.Context, id string, at time.Time) (domain.Run, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	run, ok := m.runs[id]
+	if !ok {
+		return domain.Run{}, ErrNotFound
+	}
+	if err := run.Cancel(at); err != nil {
+		return run, err
+	}
+	m.runs[id] = run
+	return run, nil
 }
 
 func (m *Memory) ListRuns(_ context.Context) ([]domain.Run, error) {
