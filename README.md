@@ -13,7 +13,7 @@
 
 AgentMesh is a portfolio-grade control-plane project for registering agents, submitting asynchronous runs, processing work through a concurrent worker pool, and streaming run lifecycle events to clients.
 
-> **Current stage: v0.2.** AgentMesh supports a zero-infrastructure memory mode and a durable distributed mode backed by PostgreSQL, NATS JetStream, and Redis. The deterministic demo executor remains intentional; real LLM and MCP runtimes are planned for v0.3.
+> **Current stage: v0.2.** AgentMesh supports a zero-infrastructure memory mode, a durable distributed mode backed by PostgreSQL, NATS JetStream, and Redis, and language-neutral remote Agents through Agent Protocol V1 over HTTP.
 
 ## Why this project exists
 
@@ -33,6 +33,8 @@ flowchart LR
     W2 --> RR
     WN --> RR
     RR --> D[Demo Runtime]
+    RR --> H[HTTP Runtime]
+    H --> A[Remote Agent]
     D --> S
     W1 --> B[Event Bus]
     W2 --> B
@@ -43,12 +45,13 @@ flowchart LR
     Q -. distributed .-> N[NATS JetStream]
 ```
 
-The Engine resolves the already-selected Agent's runtime through a concurrency-safe registry. Legacy Agents and Agents declaring `runtime: "demo"` use the deterministic `DemoExecutor` through an adapter. New runtime implementations can be registered without adding runtime-specific branching to the Engine; remote HTTP execution is not implemented yet.
+The Engine resolves the already-selected Agent's runtime through a concurrency-safe registry. Legacy Agents and Agents declaring `runtime: "demo"` use the deterministic `DemoExecutor` through an adapter. Agents declaring `runtime: "remote"` and `protocol: "http"` are invoked over Agent Protocol V1 without runtime-specific branching in the Engine.
 
 ## Features
 
 - Go standard-library HTTP server (`net/http`)
 - Agent registration and lookup
+- Remote HTTP Agent execution through Agent Protocol V1
 - Asynchronous run submission
 - Configurable concurrent worker pool
 - Explicit run state machine: `queued → running → succeeded/failed`
