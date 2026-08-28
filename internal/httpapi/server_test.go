@@ -80,6 +80,88 @@ func TestCreateAgentAndRun(t *testing.T) {
 	}
 }
 
+func TestCreateAgentWithExecutionMetadataAndList(t *testing.T) {
+	server, _ := newTestServer(t)
+	body := `{
+		"name":"Legal Agent",
+		"system_prompt":"Be precise",
+		"runtime":"REMOTE",
+		"protocol":"HTTP",
+		"endpoint":"http://legal-agent:9000",
+		"capabilities":["legal-search","legal-analysis","summarization"]
+	}`
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(body))
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", response.Code, response.Body.String())
+	}
+
+	var created domain.Agent
+	if err := json.Unmarshal(response.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	if created.Runtime != "remote" || created.Protocol != "http" || created.Endpoint != "http://legal-agent:9000" {
+		t.Fatalf("unexpected created agent: %+v", created)
+	}
+	if len(created.Capabilities) != 3 || created.Capabilities[0] != "legal-search" {
+		t.Fatalf("unexpected capabilities: %#v", created.Capabilities)
+	}
+
+	getRequest := httptest.NewRequest(http.MethodGet, "/api/v1/agents/"+created.ID, nil)
+	getResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(getResponse, getRequest)
+	if getResponse.Code != http.StatusOK || !strings.Contains(getResponse.Body.String(), `"runtime":"remote"`) {
+		t.Fatalf("unexpected get response: %d %s", getResponse.Code, getResponse.Body.String())
+	}
+
+	listRequest := httptest.NewRequest(http.MethodGet, "/api/v1/agents", nil)
+	listResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(listResponse, listRequest)
+	if listResponse.Code != http.StatusOK || !strings.Contains(listResponse.Body.String(), `"capabilities":["legal-search","legal-analysis","summarization"]`) {
+		t.Fatalf("unexpected list response: %d %s", listResponse.Code, listResponse.Body.String())
+	}
+
+	runBody, _ := json.Marshal(map[string]string{"agent_id": created.ID, "input": "hello"})
+	runRequest := httptest.NewRequest(http.MethodPost, "/api/v1/runs", bytes.NewReader(runBody))
+	runResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(runResponse, runRequest)
+	if runResponse.Code != http.StatusAccepted {
+		t.Fatalf("expected demo run status 202, got %d: %s", runResponse.Code, runResponse.Body.String())
+	}
+	var run domain.Run
+	if err := json.Unmarshal(runResponse.Body.Bytes(), &run); err != nil {
+		t.Fatal(err)
+	}
+	waitForRunStatus(t, server.store, run.ID, domain.RunSucceeded)
+	completed, err := server.store.GetRun(context.Background(), run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if completed.Output != `Agent "Legal Agent" processed: hello` {
+		t.Fatalf("configured agent did not preserve demo execution behavior: %+v", completed)
+	}
+}
+
+func TestCreateAgentRejectsInvalidExecutionMetadata(t *testing.T) {
+	tests := []string{
+		`{"name":"invalid","runtime":"remote http"}`,
+		`{"name":"invalid","protocol":"http"}`,
+		`{"name":"invalid","runtime":"remote","endpoint":"http://agent:9000"}`,
+		`{"name":"invalid","runtime":"remote","protocol":"http","endpoint":"/v1/runs"}`,
+		`{"name":"invalid","capabilities":["testing",""]}`,
+	}
+	for _, body := range tests {
+		server, _ := newTestServer(t)
+		request := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(body))
+		response := httptest.NewRecorder()
+		server.Handler().ServeHTTP(response, request)
+		if response.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400, got %d for %s: %s", response.Code, body, response.Body.String())
+		}
+	}
+}
+
 func TestRunEventsReplaysLifecycle(t *testing.T) {
 	server, _ := newTestServer(t)
 	if _, err := server.store.CreateAgent(context.Background(), domain.Agent{ID: "agt_1", Name: "test"}); err != nil {

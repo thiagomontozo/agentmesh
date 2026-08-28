@@ -88,9 +88,15 @@ func (r *Repository) Migrate(ctx context.Context) error {
 }
 
 func (r *Repository) CreateAgent(ctx context.Context, agent domain.Agent) (domain.Agent, error) {
+	if err := agent.NormalizeAndValidate(); err != nil {
+		return domain.Agent{}, err
+	}
 	_, err := r.pool.Exec(ctx,
-		"INSERT INTO agents (id, name, system_prompt, created_at) VALUES ($1, $2, $3, $4)",
-		agent.ID, agent.Name, agent.SystemPrompt, agent.CreatedAt,
+		`INSERT INTO agents (
+			id, name, system_prompt, runtime, protocol, endpoint, capabilities, created_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+		agent.ID, agent.Name, agent.SystemPrompt, agent.Runtime, agent.Protocol,
+		agent.Endpoint, agent.Capabilities, agent.CreatedAt,
 	)
 	if err != nil {
 		return domain.Agent{}, fmt.Errorf("insert agent: %w", err)
@@ -101,8 +107,12 @@ func (r *Repository) CreateAgent(ctx context.Context, agent domain.Agent) (domai
 func (r *Repository) GetAgent(ctx context.Context, id string) (domain.Agent, error) {
 	var agent domain.Agent
 	err := r.pool.QueryRow(ctx,
-		"SELECT id, name, system_prompt, created_at FROM agents WHERE id = $1", id,
-	).Scan(&agent.ID, &agent.Name, &agent.SystemPrompt, &agent.CreatedAt)
+		`SELECT id, name, system_prompt, runtime, protocol, endpoint, capabilities, created_at
+		 FROM agents WHERE id = $1`, id,
+	).Scan(
+		&agent.ID, &agent.Name, &agent.SystemPrompt, &agent.Runtime, &agent.Protocol,
+		&agent.Endpoint, &agent.Capabilities, &agent.CreatedAt,
+	)
 	if err == pgx.ErrNoRows {
 		return domain.Agent{}, store.ErrNotFound
 	}
@@ -113,7 +123,9 @@ func (r *Repository) GetAgent(ctx context.Context, id string) (domain.Agent, err
 }
 
 func (r *Repository) ListAgents(ctx context.Context) ([]domain.Agent, error) {
-	rows, err := r.pool.Query(ctx, "SELECT id, name, system_prompt, created_at FROM agents ORDER BY created_at, id")
+	rows, err := r.pool.Query(ctx, `
+		SELECT id, name, system_prompt, runtime, protocol, endpoint, capabilities, created_at
+		FROM agents ORDER BY created_at, id`)
 	if err != nil {
 		return nil, fmt.Errorf("list agents: %w", err)
 	}
@@ -121,7 +133,10 @@ func (r *Repository) ListAgents(ctx context.Context) ([]domain.Agent, error) {
 	result := make([]domain.Agent, 0)
 	for rows.Next() {
 		var agent domain.Agent
-		if err := rows.Scan(&agent.ID, &agent.Name, &agent.SystemPrompt, &agent.CreatedAt); err != nil {
+		if err := rows.Scan(
+			&agent.ID, &agent.Name, &agent.SystemPrompt, &agent.Runtime, &agent.Protocol,
+			&agent.Endpoint, &agent.Capabilities, &agent.CreatedAt,
+		); err != nil {
 			return nil, err
 		}
 		result = append(result, agent)

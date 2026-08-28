@@ -29,10 +29,13 @@ func NewMemory() *Memory {
 }
 
 func (m *Memory) CreateAgent(_ context.Context, agent domain.Agent) (domain.Agent, error) {
+	if err := agent.NormalizeAndValidate(); err != nil {
+		return domain.Agent{}, err
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.agents[agent.ID] = agent
-	return agent, nil
+	m.agents[agent.ID] = cloneAgent(agent)
+	return cloneAgent(agent), nil
 }
 
 func (m *Memory) GetAgent(_ context.Context, id string) (domain.Agent, error) {
@@ -42,7 +45,7 @@ func (m *Memory) GetAgent(_ context.Context, id string) (domain.Agent, error) {
 	if !ok {
 		return domain.Agent{}, ErrNotFound
 	}
-	return agent, nil
+	return cloneAgent(agent), nil
 }
 
 func (m *Memory) ListAgents(_ context.Context) ([]domain.Agent, error) {
@@ -50,7 +53,7 @@ func (m *Memory) ListAgents(_ context.Context) ([]domain.Agent, error) {
 	defer m.mu.RUnlock()
 	result := make([]domain.Agent, 0, len(m.agents))
 	for _, agent := range m.agents {
-		result = append(result, agent)
+		result = append(result, cloneAgent(agent))
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].CreatedAt.Before(result[j].CreatedAt) })
 	return result, nil
@@ -123,4 +126,9 @@ func (m *Memory) RecoverPendingRuns(_ context.Context) ([]string, error) {
 
 func (m *Memory) Ping(context.Context) error {
 	return nil
+}
+
+func cloneAgent(agent domain.Agent) domain.Agent {
+	agent.Capabilities = append([]string(nil), agent.Capabilities...)
+	return agent
 }

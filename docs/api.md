@@ -25,6 +25,22 @@ curl -X POST http://localhost:8080/api/v1/agents \
   -d '{"name":"Researcher","system_prompt":"Be concise and evidence-oriented."}'
 ```
 
+Legacy agent definitions remain valid and continue to use the demo execution behavior. Agents may also declare optional execution metadata for future runtimes:
+
+```bash
+curl -X POST http://localhost:8080/api/v1/agents \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "name":"Legal Agent",
+    "runtime":"remote",
+    "protocol":"http",
+    "endpoint":"http://legal-agent:9000",
+    "capabilities":["legal-search","legal-analysis","summarization"]
+  }'
+```
+
+`runtime` and `protocol` are extensible lowercase identifiers. `endpoint` must be an absolute URI and requires both identifiers. Capabilities are metadata only in the current version: AgentMesh does not route by capability or call remote endpoints yet.
+
 List or fetch agents:
 
 ```bash
