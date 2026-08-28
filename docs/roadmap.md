@@ -25,6 +25,7 @@
 - [x] Remote HTTP runtime
 - [x] Multi-Agent HTTP interoperability test
 - [x] Per-attempt runtime timeout
+- [x] Runtime panic isolation
 - [ ] LLM provider interface
 - [ ] OpenAI-compatible provider
 - [ ] MCP client and tool registry

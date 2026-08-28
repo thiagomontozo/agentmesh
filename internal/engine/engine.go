@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -35,6 +36,7 @@ type RetryPolicy struct {
 const DefaultAttemptTimeout = 30 * time.Second
 
 var ErrAttemptTimeout = errors.New("run attempt timed out")
+var ErrRuntimePanic = errors.New("runtime panic")
 
 func (d DemoExecutor) Execute(ctx context.Context, agent domain.Agent, input string) (string, error) {
 	timer := time.NewTimer(d.Delay)
@@ -193,7 +195,7 @@ func (e *Engine) execute(ctx context.Context, runID string) error {
 		e.publish(run.ID, "run.started", fmt.Sprintf("attempt %d of %d started", run.Attempt, run.MaxAttempts))
 
 		attemptCtx, cancelAttempt := context.WithTimeout(ctx, e.retry.AttemptTimeout)
-		result, executeErr := implementation.Execute(attemptCtx, agentruntime.ExecutionRequest{
+		result, executeErr := executeRuntimeSafely(attemptCtx, implementation, agentruntime.ExecutionRequest{
 			RunID: run.ID, Agent: agent, Attempt: run.Attempt, Input: run.Input,
 		})
 		attemptContextErr := attemptCtx.Err()
@@ -201,7 +203,7 @@ func (e *Engine) execute(ctx context.Context, runID string) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if errors.Is(attemptContextErr, context.DeadlineExceeded) {
+		if errors.Is(attemptContextErr, context.DeadlineExceeded) && !errors.Is(executeErr, ErrRuntimePanic) {
 			executeErr = fmt.Errorf("%w: attempt %d exceeded %s", ErrAttemptTimeout, run.Attempt, e.retry.AttemptTimeout)
 			e.publish(run.ID, "run.attempt_timed_out", executeErr.Error())
 		}
@@ -227,6 +229,23 @@ func (e *Engine) execute(ctx context.Context, runID string) error {
 		case <-time.After(backoff):
 		}
 	}
+}
+
+func executeRuntimeSafely(ctx context.Context, implementation agentruntime.Runtime, request agentruntime.ExecutionRequest) (result agentruntime.ExecutionResult, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			result = agentruntime.ExecutionResult{}
+			err = fmt.Errorf("%w: %v", ErrRuntimePanic, recovered)
+			slog.ErrorContext(ctx, "runtime panic recovered",
+				"run_id", request.RunID,
+				"agent_id", request.AgentID(),
+				"attempt", request.Attempt,
+				"panic", fmt.Sprint(recovered),
+				"stack", string(debug.Stack()),
+			)
+		}
+	}()
+	return implementation.Execute(ctx, request)
 }
 
 func (e *Engine) failRun(ctx context.Context, run domain.Run, err error) error {

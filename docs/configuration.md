@@ -76,6 +76,8 @@ Every runtime call receives a child context with `AGENTMESH_ATTEMPT_TIMEOUT`. A 
 
 Other executor failures use exponential backoff up to `AGENTMESH_RETRY_MAX_BACKOFF`. After the configured attempt count, the run is marked `failed` and a JSON record is published to `agentmesh.runs.dlq`. Infrastructure errors are negatively acknowledged so JetStream can redeliver them.
 
+A panic raised by a runtime or legacy executor is recovered only at the runtime-call boundary. It is logged with execution identifiers and a stack trace, then treated as a normal attempt failure. Repeated panics therefore exhaust `AGENTMESH_MAX_ATTEMPTS`, fail the Run, and reach the DLQ without terminating the worker process.
+
 Runs interrupted by process shutdown remain recoverable. On the next distributed startup, `running` runs are reset to `queued` and queued work is republished using the run ID as its JetStream deduplication key.
 
 ## Production notes

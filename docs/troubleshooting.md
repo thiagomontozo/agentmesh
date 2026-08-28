@@ -35,3 +35,7 @@ Check NATS connectivity and the `AGENTMESH_RUNS` stream. AgentMesh republishes p
 ## A run is retried more than once
 
 JetStream provides at-least-once delivery. Duplicate delivery is expected after acknowledgement loss. AgentMesh treats terminal runs as already processed, while future side-effecting executors must make their own external actions idempotent.
+
+## A run fails with `runtime panic`
+
+AgentMesh recovered a panic raised inside `Runtime.Execute`. Search structured logs for `runtime panic recovered` and the matching `run_id`; the record includes `agent_id`, `attempt`, panic value, and stack trace. The Run follows normal retry and DLQ policy. Fix the runtime implementation rather than treating recovery as successful execution. `worker_id` is not currently available because queue handlers do not propagate it to the Engine.

@@ -44,6 +44,8 @@ Transport failures are classified as temporary, permanent, timeout, canceled, or
 
 Each runtime attempt runs synchronously under a child context bounded by `AGENTMESH_ATTEMPT_TIMEOUT`. Attempt timeout is distinct from cancellation of the Engine's parent context: timeout consumes an attempt and may retry, while shutdown cancellation exits execution and leaves the running Run recoverable. No watchdog goroutine is created, so runtimes that honor context cannot leak execution goroutines or indefinitely block graceful worker shutdown.
 
+`Runtime.Execute` is also a panic boundary. A recovered panic becomes an explicit execution error, follows the existing retry/dead-letter lifecycle, and cannot terminate the process or the consuming worker. The structured error log includes Run ID, Agent ID, attempt, panic value, and stack trace. Queue handlers do not currently propagate worker identity to the Engine, so `worker_id` is not yet available at this boundary. Lease release and queue semaphore cleanup remain protected by their existing defers outside the runtime call.
+
 The language boundary is covered by an integration test with two independent HTTP endpoints. Both Agents are registered through the public API and share one HTTP runtime; adding the second Agent introduces only data, not another executor implementation. See [External HTTP Agents](external-agents.md).
 
 ## Memory mode
