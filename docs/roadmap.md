@@ -21,6 +21,9 @@
 - [x] Dead-letter handling
 
 ## v0.3 — Real agent runtime
+- [x] Agent Protocol V1
+- [x] Remote HTTP runtime
+- [x] Multi-Agent HTTP interoperability test
 - [ ] LLM provider interface
 - [ ] OpenAI-compatible provider
 - [ ] MCP client and tool registry
