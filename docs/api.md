@@ -81,6 +81,7 @@ Typical event names are:
 - `run.queued`
 - `run.started`
 - `run.retrying`
+- `run.attempt_timed_out`
 - `run.succeeded`
 - `run.failed`
 

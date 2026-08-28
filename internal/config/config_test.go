@@ -15,7 +15,7 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Addr != ":8080" || cfg.Mode != "memory" || cfg.Workers != 4 || cfg.QueueSize != 128 {
 		t.Fatalf("unexpected defaults: %+v", cfg)
 	}
-	if cfg.ExecutionDelay != 750*time.Millisecond || cfg.ShutdownTimeout != 10*time.Second {
+	if cfg.ExecutionDelay != 750*time.Millisecond || cfg.AttemptTimeout != 30*time.Second || cfg.ShutdownTimeout != 10*time.Second {
 		t.Fatalf("unexpected duration defaults: %+v", cfg)
 	}
 	if cfg.MaxAttempts != 3 || cfg.RetryInitial != 250*time.Millisecond || cfg.RetryMax != 5*time.Second {
@@ -34,6 +34,8 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 		{name: "workers is zero", key: "AGENTMESH_WORKERS", value: "0"},
 		{name: "queue is zero", key: "AGENTMESH_QUEUE_SIZE", value: "0"},
 		{name: "delay is invalid", key: "AGENTMESH_EXECUTION_DELAY", value: "later"},
+		{name: "attempt timeout is invalid", key: "AGENTMESH_ATTEMPT_TIMEOUT", value: "later"},
+		{name: "attempt timeout is zero", key: "AGENTMESH_ATTEMPT_TIMEOUT", value: "0s"},
 		{name: "shutdown is invalid", key: "AGENTMESH_SHUTDOWN_TIMEOUT", value: "soon"},
 		{name: "attempts is zero", key: "AGENTMESH_MAX_ATTEMPTS", value: "0"},
 		{name: "initial backoff is zero", key: "AGENTMESH_RETRY_INITIAL_BACKOFF", value: "0s"},
@@ -51,6 +53,19 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 				t.Fatal("expected configuration error")
 			}
 		})
+	}
+}
+
+func TestLoadConfiguresAttemptTimeout(t *testing.T) {
+	clearEnvironment(t)
+	t.Setenv("AGENTMESH_ATTEMPT_TIMEOUT", "45s")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AttemptTimeout != 45*time.Second {
+		t.Fatalf("expected 45s attempt timeout, got %s", cfg.AttemptTimeout)
 	}
 }
 
@@ -81,6 +96,7 @@ func clearEnvironment(t *testing.T) {
 		"AGENTMESH_WORKERS",
 		"AGENTMESH_QUEUE_SIZE",
 		"AGENTMESH_EXECUTION_DELAY",
+		"AGENTMESH_ATTEMPT_TIMEOUT",
 		"AGENTMESH_SHUTDOWN_TIMEOUT",
 		"AGENTMESH_DATABASE_URL",
 		"AGENTMESH_NATS_URL",

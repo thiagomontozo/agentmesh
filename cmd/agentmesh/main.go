@@ -71,7 +71,10 @@ func main() {
 	eventBus := events.NewBus()
 	executor := engine.DemoExecutor{Delay: cfg.ExecutionDelay}
 	runtimeResolver := agentruntime.NewRegistry(agentruntime.AdaptLegacy(executor))
-	if err := runtimeResolver.Register(agentruntime.RemoteRuntime, agentruntime.NewHTTPRuntime(nil, 0)); err != nil {
+	if err := runtimeResolver.Register(
+		agentruntime.RemoteRuntime,
+		agentruntime.NewHTTPRuntime(&http.Client{Timeout: cfg.AttemptTimeout}, 0),
+	); err != nil {
 		slog.Error("HTTP runtime registration failed", "error", err)
 		os.Exit(1)
 	}
@@ -80,6 +83,7 @@ func main() {
 		InitialBackoff: cfg.RetryInitial,
 		MaxBackoff:     cfg.RetryMax,
 		LeaseTTL:       cfg.LeaseTTL,
+		AttemptTimeout: cfg.AttemptTimeout,
 	})
 	if err := runEngine.Recover(rootCtx); err != nil {
 		slog.Error("run recovery failed", "error", err)

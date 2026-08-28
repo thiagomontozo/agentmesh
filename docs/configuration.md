@@ -33,6 +33,7 @@ The API is available at `http://localhost:8080`. PostgreSQL migrations run autom
 | `AGENTMESH_WORKERS` | `4` | Must be at least 1 |
 | `AGENTMESH_QUEUE_SIZE` | `128` | Bounded queue size in memory mode; must be at least 1 |
 | `AGENTMESH_EXECUTION_DELAY` | `750ms` | Artificial latency of the demo executor |
+| `AGENTMESH_ATTEMPT_TIMEOUT` | `30s` | Maximum runtime duration for each attempt; must be positive |
 | `AGENTMESH_SHUTDOWN_TIMEOUT` | `10s` | Maximum graceful HTTP shutdown period |
 | `AGENTMESH_MAX_ATTEMPTS` | `3` | Executor attempts before a run fails and is dead-lettered |
 | `AGENTMESH_RETRY_INITIAL_BACKOFF` | `250ms` | First retry delay |
@@ -46,7 +47,7 @@ The API is available at `http://localhost:8080`. PostgreSQL migrations run autom
 
 ## Remote HTTP Agents
 
-Register a remote Agent with `runtime: "remote"`, `protocol: "http"`, and an HTTP or HTTPS base `endpoint`. AgentMesh appends `/v1/runs` and sends [Agent Protocol V1](agent-protocol-v1.md). The current HTTP runtime has a 30-second client timeout and a 1 MiB response limit; per-attempt timeout configuration is a later lifecycle change.
+Register a remote Agent with `runtime: "remote"`, `protocol: "http"`, and an HTTP or HTTPS base `endpoint`. AgentMesh appends `/v1/runs` and sends [Agent Protocol V1](agent-protocol-v1.md). `AGENTMESH_ATTEMPT_TIMEOUT` controls both the execution context and application HTTP client timeout; responses are limited to 1 MiB.
 
 Redirects, URL credentials, query strings, fragments, and non-HTTP schemes are rejected. Private network addresses are intentionally allowed because AgentMesh is designed to call internal services. Consequently, Agent registration is a privileged trust boundary: an untrusted registrant could use endpoints for SSRF, DNS-rebinding, or cloud metadata access. Network allow/deny policy is not implemented yet and must be enforced at the deployment network layer until the dedicated HTTP-runtime security stage.
 
@@ -71,7 +72,9 @@ For PowerShell, use `$env:AGENTMESH_MODE = "distributed"` and the corresponding 
 
 ## Retry and dead-letter behavior
 
-Executor failures use exponential backoff up to `AGENTMESH_RETRY_MAX_BACKOFF`. After the configured attempt count, the run is marked `failed` and a JSON record is published to `agentmesh.runs.dlq`. Infrastructure errors are negatively acknowledged so JetStream can redeliver them.
+Every runtime call receives a child context with `AGENTMESH_ATTEMPT_TIMEOUT`. A timeout emits `run.attempt_timed_out` and consumes one attempt. If attempts remain, normal exponential backoff and retry apply; otherwise the Run is marked `failed` and dead-lettered with a timeout error. A parent-context cancellation, such as process shutdown, interrupts the attempt without converting the recoverable running Run into a terminal timeout failure.
+
+Other executor failures use exponential backoff up to `AGENTMESH_RETRY_MAX_BACKOFF`. After the configured attempt count, the run is marked `failed` and a JSON record is published to `agentmesh.runs.dlq`. Infrastructure errors are negatively acknowledged so JetStream can redeliver them.
 
 Runs interrupted by process shutdown remain recoverable. On the next distributed startup, `running` runs are reset to `queued` and queued work is republished using the run ID as its JetStream deduplication key.
 
@@ -82,5 +85,6 @@ Runs interrupted by process shutdown remain recoverable. On the next distributed
 - Do not expose dependency ports publicly.
 - Restrict who can register or change remote Agent endpoints, and apply outbound network policy to AgentMesh.
 - Set both `AGENTMESH_NATS_ACK_WAIT` and `AGENTMESH_LEASE_TTL` above the longest expected executor attempt.
+- Runtimes must honor context cancellation; AgentMesh does not detach runtime calls into goroutines to force-stop implementations that ignore context.
 - Back up PostgreSQL and the JetStream storage directory.
 - The current SSE event bus is process-local; use sticky routing for SSE clients until durable cross-replica events are implemented.
