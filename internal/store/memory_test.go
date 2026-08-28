@@ -33,6 +33,45 @@ func TestMemoryAgentLifecycle(t *testing.T) {
 	}
 }
 
+func TestMemoryPersistsAgentExecutionMetadata(t *testing.T) {
+	ctx := context.Background()
+	memory := NewMemory()
+	agent := domain.Agent{
+		ID: "agt_remote", Name: "legal", Runtime: "remote", Protocol: "http",
+		Endpoint: "http://legal-agent:9000", Capabilities: []string{"legal-search", "legal-analysis"},
+		CreatedAt: time.Now().UTC(),
+	}
+	created, err := memory.CreateAgent(ctx, agent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := memory.GetAgent(ctx, agent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Runtime != created.Runtime || loaded.Protocol != created.Protocol || loaded.Endpoint != created.Endpoint {
+		t.Fatalf("execution metadata was not preserved: %+v", loaded)
+	}
+	if len(loaded.Capabilities) != 2 || loaded.Capabilities[1] != "legal-analysis" {
+		t.Fatalf("capabilities were not preserved: %#v", loaded.Capabilities)
+	}
+	agents, err := memory.ListAgents(ctx)
+	if err != nil || len(agents) != 1 || agents[0].Runtime != "remote" {
+		t.Fatalf("unexpected list result: agents=%+v err=%v", agents, err)
+	}
+
+	agent.Capabilities[0] = "mutated-input"
+	loaded.Capabilities[0] = "mutated-read"
+	agents[0].Capabilities[0] = "mutated-list"
+	isolated, err := memory.GetAgent(ctx, agent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if isolated.Capabilities[0] != "legal-search" {
+		t.Fatalf("stored capabilities were mutated through an external slice: %#v", isolated.Capabilities)
+	}
+}
+
 func TestMemoryRunLifecycle(t *testing.T) {
 	ctx := context.Background()
 	memory := NewMemory()

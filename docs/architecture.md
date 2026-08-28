@@ -2,6 +2,12 @@
 
 AgentMesh has two runtime modes that share the same HTTP, domain, engine, and executor layers.
 
+## Agent definitions
+
+Agent definitions can optionally declare `runtime`, `protocol`, `endpoint`, and `capabilities`. These fields describe how an agent may be executed by future runtime adapters; capabilities are metadata only. Legacy definitions without execution metadata remain valid and continue to use the deterministic demo executor.
+
+The current engine behavior is intentionally unchanged: execution metadata is persisted and exposed by the API, but it is not resolved or invoked yet.
+
 ## Memory mode
 
 Memory mode is the default. It uses a mutex-protected repository and bounded Go channel, requires no external services, and is intended for development and unit tests. State is process-local.

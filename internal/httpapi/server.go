@@ -67,8 +67,12 @@ func (s *Server) ready(w http.ResponseWriter, r *http.Request) {
 }
 
 type createAgentRequest struct {
-	Name         string `json:"name"`
-	SystemPrompt string `json:"system_prompt"`
+	Name         string   `json:"name"`
+	SystemPrompt string   `json:"system_prompt"`
+	Runtime      string   `json:"runtime"`
+	Protocol     string   `json:"protocol"`
+	Endpoint     string   `json:"endpoint"`
+	Capabilities []string `json:"capabilities"`
 }
 
 func (s *Server) createAgent(w http.ResponseWriter, r *http.Request) {
@@ -78,17 +82,19 @@ func (s *Server) createAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	request.Name = strings.TrimSpace(request.Name)
-	if request.Name == "" {
-		writeError(w, http.StatusBadRequest, "name is required")
-		return
-	}
-
 	agent := domain.Agent{
 		ID:           newID("agt"),
 		Name:         request.Name,
-		SystemPrompt: strings.TrimSpace(request.SystemPrompt),
+		SystemPrompt: request.SystemPrompt,
+		Runtime:      request.Runtime,
+		Protocol:     request.Protocol,
+		Endpoint:     request.Endpoint,
+		Capabilities: request.Capabilities,
 		CreatedAt:    time.Now().UTC(),
+	}
+	if err := agent.NormalizeAndValidate(); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
 	}
 	if _, err := s.store.CreateAgent(r.Context(), agent); err != nil {
 		writeError(w, http.StatusInternalServerError, "could not create agent")

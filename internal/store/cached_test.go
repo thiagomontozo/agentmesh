@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -66,7 +67,10 @@ func TestCachedRepositoryReadsCachedAgent(t *testing.T) {
 	inner := NewMemory()
 	cache := newFakeCache()
 	repository := NewCached(inner, cache, time.Minute)
-	original := domain.Agent{ID: "agt_1", Name: "cached"}
+	original := domain.Agent{
+		ID: "agt_1", Name: "cached", Runtime: "remote", Protocol: "http",
+		Endpoint: "http://agent:9000", Capabilities: []string{"testing"},
+	}
 	if _, err := repository.CreateAgent(ctx, original); err != nil {
 		t.Fatal(err)
 	}
@@ -77,8 +81,11 @@ func TestCachedRepositoryReadsCachedAgent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.Name != original.Name {
-		t.Fatalf("expected cached agent %q, got %q", original.Name, loaded.Name)
+	if loaded.Name != original.Name || loaded.Runtime != original.Runtime || loaded.Endpoint != original.Endpoint {
+		t.Fatalf("expected cached agent %+v, got %+v", original, loaded)
+	}
+	if len(loaded.Capabilities) != 1 || loaded.Capabilities[0] != "testing" {
+		t.Fatalf("unexpected cached capabilities: %#v", loaded.Capabilities)
 	}
 }
 
@@ -93,7 +100,9 @@ func TestCachedRepositoryFallsBackWhenCacheReadFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	loaded, err := repository.GetAgent(ctx, want.ID)
-	if err != nil || loaded != want {
+	if err != nil || loaded.ID != want.ID || loaded.Name != want.Name ||
+		loaded.Runtime != want.Runtime || loaded.Protocol != want.Protocol ||
+		loaded.Endpoint != want.Endpoint || !slices.Equal(loaded.Capabilities, want.Capabilities) {
 		t.Fatalf("unexpected fallback: agent=%+v err=%v", loaded, err)
 	}
 }

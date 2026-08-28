@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"slices"
 	"testing"
 	"time"
 
@@ -58,6 +59,35 @@ func TestDistributedRunLifecycleAndIdempotency(t *testing.T) {
 	agent := domain.Agent{ID: "agt_" + suffix, Name: "integration", CreatedAt: time.Now().UTC()}
 	if _, err := repository.CreateAgent(ctx, agent); err != nil {
 		t.Fatal(err)
+	}
+	configuredAgent := domain.Agent{
+		ID: "agt_configured_" + suffix, Name: "configured", Runtime: "remote", Protocol: "http",
+		Endpoint: "http://agent:9000", Capabilities: []string{"testing", "debugging"}, CreatedAt: time.Now().UTC(),
+	}
+	if _, err := repository.CreateAgent(ctx, configuredAgent); err != nil {
+		t.Fatal(err)
+	}
+	loadedAgent, err := repository.GetAgent(ctx, configuredAgent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loadedAgent.Runtime != configuredAgent.Runtime || loadedAgent.Protocol != configuredAgent.Protocol ||
+		loadedAgent.Endpoint != configuredAgent.Endpoint || !slices.Equal(loadedAgent.Capabilities, configuredAgent.Capabilities) {
+		t.Fatalf("agent execution metadata was not persisted: got=%+v want=%+v", loadedAgent, configuredAgent)
+	}
+	agents, err := repository.ListAgents(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundConfigured := false
+	for _, listed := range agents {
+		if listed.ID == configuredAgent.ID {
+			foundConfigured = slices.Equal(listed.Capabilities, configuredAgent.Capabilities)
+			break
+		}
+	}
+	if !foundConfigured {
+		t.Fatalf("configured agent was not listed with its capabilities: %+v", agents)
 	}
 	run := domain.Run{
 		ID: "run_" + suffix, AgentID: agent.ID, Input: "hello", Status: domain.RunQueued,
