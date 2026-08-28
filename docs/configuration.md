@@ -44,6 +44,12 @@ The API is available at `http://localhost:8080`. PostgreSQL migrations run autom
 | `AGENTMESH_NATS_URL` | none | Required in distributed mode |
 | `AGENTMESH_REDIS_URL` | none | Required in distributed mode |
 
+## Remote HTTP Agents
+
+Register a remote Agent with `runtime: "remote"`, `protocol: "http"`, and an HTTP or HTTPS base `endpoint`. AgentMesh appends `/v1/runs` and sends [Agent Protocol V1](agent-protocol-v1.md). The current HTTP runtime has a 30-second client timeout and a 1 MiB response limit; per-attempt timeout configuration is a later lifecycle change.
+
+Redirects, URL credentials, query strings, fragments, and non-HTTP schemes are rejected. Private network addresses are intentionally allowed because AgentMesh is designed to call internal services. Consequently, Agent registration is a privileged trust boundary: an untrusted registrant could use endpoints for SSRF, DNS-rebinding, or cloud metadata access. Network allow/deny policy is not implemented yet and must be enforced at the deployment network layer until the dedicated HTTP-runtime security stage.
+
 Example without Compose:
 
 ```bash
@@ -74,6 +80,7 @@ Runs interrupted by process shutdown remain recoverable. On the next distributed
 - Replace the development passwords from `compose.yml`.
 - Enable TLS and authentication for PostgreSQL, NATS, and Redis.
 - Do not expose dependency ports publicly.
+- Restrict who can register or change remote Agent endpoints, and apply outbound network policy to AgentMesh.
 - Set both `AGENTMESH_NATS_ACK_WAIT` and `AGENTMESH_LEASE_TTL` above the longest expected executor attempt.
 - Back up PostgreSQL and the JetStream storage directory.
 - The current SSE event bus is process-local; use sticky routing for SSE clients until durable cross-replica events are implemented.

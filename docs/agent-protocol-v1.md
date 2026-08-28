@@ -1,6 +1,6 @@
 # Agent Protocol V1
 
-Agent Protocol V1 is the language-neutral HTTP/JSON contract between AgentMesh and a remote Agent. This document defines the wire format only. AgentMesh does not call remote endpoints until an HTTP runtime is implemented.
+Agent Protocol V1 is the language-neutral HTTP/JSON contract between AgentMesh and a remote Agent. Agents registered with `runtime: "remote"`, `protocol: "http"`, and a base `endpoint` are invoked through the HTTP runtime.
 
 ## Transport
 
@@ -69,7 +69,7 @@ Agent Protocol V1 is the language-neutral HTTP/JSON contract between AgentMesh a
 | `error.message` | string | on failure | Human-readable diagnostic without secrets. |
 | `error.retryable` | boolean | on failure | Whether retrying may succeed. This is advisory; AgentMesh owns retry policy. |
 
-An HTTP runtime must additionally validate the HTTP status, JSON syntax, response size, protocol version, and matching `run_id`. Those transport rules are intentionally deferred to the HTTP runtime implementation.
+The AgentMesh HTTP runtime validates the HTTP status, JSON syntax, response size, media type, protocol version, and matching `run_id`. It does not follow redirects.
 
 ## HTTP status
 

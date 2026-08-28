@@ -17,6 +17,7 @@ import (
 	"github.com/thiagomontozo/agentmesh/internal/events"
 	"github.com/thiagomontozo/agentmesh/internal/httpapi"
 	"github.com/thiagomontozo/agentmesh/internal/queue"
+	agentruntime "github.com/thiagomontozo/agentmesh/internal/runtime"
 	"github.com/thiagomontozo/agentmesh/internal/store"
 	postgresstore "github.com/thiagomontozo/agentmesh/internal/store/postgres"
 )
@@ -69,7 +70,12 @@ func main() {
 
 	eventBus := events.NewBus()
 	executor := engine.DemoExecutor{Delay: cfg.ExecutionDelay}
-	runEngine := engine.New(repository, eventBus, executor, runQueue, coordinator, cfg.Workers, engine.RetryPolicy{
+	runtimeResolver := agentruntime.NewRegistry(agentruntime.AdaptLegacy(executor))
+	if err := runtimeResolver.Register(agentruntime.RemoteRuntime, agentruntime.NewHTTPRuntime(nil, 0)); err != nil {
+		slog.Error("HTTP runtime registration failed", "error", err)
+		os.Exit(1)
+	}
+	runEngine := engine.NewWithResolver(repository, eventBus, runtimeResolver, runQueue, coordinator, cfg.Workers, engine.RetryPolicy{
 		MaxAttempts:    cfg.MaxAttempts,
 		InitialBackoff: cfg.RetryInitial,
 		MaxBackoff:     cfg.RetryMax,

@@ -28,16 +28,19 @@ ExecutionResult (Output) or error
 Engine.execute
         ↓ Agent already selected by Run.AgentID
 Runtime Resolver
-        └── demo → AdaptLegacy(DemoExecutor)
+        ├── demo → AdaptLegacy(DemoExecutor)
+        └── remote + protocol http → HTTP Runtime → Agent endpoint /v1/runs
 ```
 
-`engine.New` preserves the original constructor and installs the demo adapter. `engine.NewWithResolver` supports explicit runtime wiring. The Engine only constructs `ExecutionRequest`, calls `Resolver.Resolve(agent)`, and invokes the returned `Runtime`; it contains no runtime-specific switch and performs no Agent routing. HTTP execution is not implemented at this stage.
+`engine.New` preserves the original constructor and installs the demo adapter. The application uses `engine.NewWithResolver` to register both the demo adapter and the HTTP runtime. The Engine only constructs `ExecutionRequest`, calls `Resolver.Resolve(agent)`, and invokes the returned `Runtime`; it contains no runtime-specific switch and performs no Agent routing.
 
 ## Agent Protocol V1
 
 `internal/protocol/v1` defines explicit JSON request, response, status, and structured error types for remote execution. The contract carries protocol version, Run and Agent identities, attempt, idempotency identity, input, output, status, and retryability. It is independent from the internal Go `Runtime` interface and is documented in [Agent Protocol V1](agent-protocol-v1.md), so non-Go Agents can implement it.
 
-This stage defines no transport implementation. The resolver still has only the demo runtime registered, and AgentMesh does not make outbound Agent calls yet.
+`runtime.HTTPRuntime` maps the internal execution request to Agent Protocol V1 and posts it to the registered Agent endpoint. It accepts `runtime: "remote"` with `protocol: "http"`; the endpoint is a base URL and `/v1/runs` is appended. Redirects are not followed, response bodies are bounded, and protocol responses are validated before their output is accepted.
+
+Transport failures are classified as temporary, permanent, timeout, canceled, or protocol errors. HTTP `408`, `429`, and `5xx` are temporary; other non-`200` statuses are permanent. A V1 failed response uses its `error.retryable` flag for classification. The Engine retains ownership of retry policy and, at this stage, continues its existing attempt policy for every non-context execution error.
 
 ## Memory mode
 
