@@ -33,6 +33,12 @@ Runtime Resolver
 
 `engine.New` preserves the original constructor and installs the demo adapter. `engine.NewWithResolver` supports explicit runtime wiring. The Engine only constructs `ExecutionRequest`, calls `Resolver.Resolve(agent)`, and invokes the returned `Runtime`; it contains no runtime-specific switch and performs no Agent routing. HTTP execution is not implemented at this stage.
 
+## Agent Protocol V1
+
+`internal/protocol/v1` defines explicit JSON request, response, status, and structured error types for remote execution. The contract carries protocol version, Run and Agent identities, attempt, idempotency identity, input, output, status, and retryability. It is independent from the internal Go `Runtime` interface and is documented in [Agent Protocol V1](agent-protocol-v1.md), so non-Go Agents can implement it.
+
+This stage defines no transport implementation. The resolver still has only the demo runtime registered, and AgentMesh does not make outbound Agent calls yet.
+
 ## Memory mode
 
 Memory mode is the default. It uses a mutex-protected repository and bounded Go channel, requires no external services, and is intended for development and unit tests. State is process-local.

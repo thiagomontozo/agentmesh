@@ -170,6 +170,7 @@ internal/config/        environment configuration
 internal/domain/        core domain models
 internal/engine/        queue, workers and executor abstraction
 internal/runtime/       runtime request/result contract and legacy adapter
+internal/protocol/v1/   language-neutral Agent Protocol V1 wire types
 internal/events/        in-process event bus
 internal/httpapi/       REST + SSE transport
 internal/queue/         memory and NATS JetStream queues
@@ -183,6 +184,7 @@ docs/                   roadmap and architecture notes
 ## Documentation
 
 - [Architecture and delivery guarantees](docs/architecture.md)
+- [Agent Protocol V1](docs/agent-protocol-v1.md)
 - [Configuration and operations](docs/configuration.md)
 - [API usage and examples](docs/api.md)
 - [Troubleshooting](docs/troubleshooting.md)
