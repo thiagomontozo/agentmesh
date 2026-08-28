@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/thiagomontozo/agentmesh/internal/domain"
 	"github.com/thiagomontozo/agentmesh/internal/events"
 	"github.com/thiagomontozo/agentmesh/internal/queue"
+	agentruntime "github.com/thiagomontozo/agentmesh/internal/runtime"
 	"github.com/thiagomontozo/agentmesh/internal/store"
 )
 
@@ -18,6 +20,12 @@ type executorFunc func(context.Context, domain.Agent, string) (string, error)
 
 func (f executorFunc) Execute(ctx context.Context, agent domain.Agent, input string) (string, error) {
 	return f(ctx, agent, input)
+}
+
+type resolvedRuntimeFunc func(context.Context, agentruntime.ExecutionRequest) (agentruntime.ExecutionResult, error)
+
+func (f resolvedRuntimeFunc) Execute(ctx context.Context, request agentruntime.ExecutionRequest) (agentruntime.ExecutionResult, error) {
+	return f(ctx, request)
 }
 
 func TestEngineCompletesRun(t *testing.T) {
@@ -29,6 +37,57 @@ func TestEngineCompletesRun(t *testing.T) {
 	run := waitForStatus(t, memory, "run_1", domain.RunSucceeded)
 	if run.Output != "done" || run.Attempt != 1 || run.StartedAt == nil || run.CompletedAt == nil {
 		t.Fatalf("unexpected completed run: %+v", run)
+	}
+}
+
+func TestEnginePassesAttemptContextThroughResolvedRuntime(t *testing.T) {
+	requests := make(chan agentruntime.ExecutionRequest, 1)
+	implementation := resolvedRuntimeFunc(func(_ context.Context, request agentruntime.ExecutionRequest) (agentruntime.ExecutionResult, error) {
+		requests <- request
+		return agentruntime.ExecutionResult{Output: "resolved"}, nil
+	})
+	resolver := agentruntime.NewRegistry(implementation)
+	memory := store.NewMemory()
+	memoryQueue := queue.NewMemory(8)
+	runEngine := NewWithResolver(memory, events.NewBus(), resolver, memoryQueue, coordination.NewMemory(), 1, testRetryPolicy(3))
+	ctx, cancel := context.WithCancel(context.Background())
+	runEngine.Start(ctx)
+	t.Cleanup(func() {
+		cancel()
+		runEngine.Stop()
+	})
+	enqueueTestRun(t, memory, runEngine)
+
+	run := waitForStatus(t, memory, "run_1", domain.RunSucceeded)
+	request := <-requests
+	if request.RunID != run.ID || request.AgentID() != run.AgentID || request.Attempt != 1 || request.Input != "hello" {
+		t.Fatalf("unexpected runtime request: %+v", request)
+	}
+}
+
+func TestEngineFailsRunForUnknownRuntime(t *testing.T) {
+	memory, memoryQueue, runEngine := newEngineTest(t, executorFunc(func(context.Context, domain.Agent, string) (string, error) {
+		return "unexpected", nil
+	}), 3)
+	ctx := context.Background()
+	if _, err := memory.CreateAgent(ctx, domain.Agent{ID: "agt_1", Name: "remote", Runtime: "remote-http"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := memory.CreateRun(ctx, domain.Run{
+		ID: "run_1", AgentID: "agt_1", Input: "hello", Status: domain.RunQueued, MaxAttempts: 3,
+	}, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := runEngine.Enqueue(ctx, "run_1"); err != nil {
+		t.Fatal(err)
+	}
+
+	run := waitForStatus(t, memory, "run_1", domain.RunFailed)
+	if !strings.Contains(run.Error, agentruntime.ErrUnknownRuntime.Error()) || !strings.Contains(run.Error, "remote-http") {
+		t.Fatalf("expected explicit unknown runtime error, got %+v", run)
+	}
+	if len(memoryQueue.DeadLetters()) != 1 {
+		t.Fatalf("expected unknown runtime in dead-letter queue")
 	}
 }
 
