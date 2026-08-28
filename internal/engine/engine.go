@@ -12,6 +12,7 @@ import (
 	"github.com/thiagomontozo/agentmesh/internal/domain"
 	"github.com/thiagomontozo/agentmesh/internal/events"
 	"github.com/thiagomontozo/agentmesh/internal/queue"
+	agentruntime "github.com/thiagomontozo/agentmesh/internal/runtime"
 	"github.com/thiagomontozo/agentmesh/internal/store"
 )
 
@@ -46,7 +47,7 @@ func (d DemoExecutor) Execute(ctx context.Context, agent domain.Agent, input str
 type Engine struct {
 	store    store.Repository
 	events   *events.Bus
-	executor Executor
+	resolver agentruntime.Resolver
 	queue    queue.Queue
 	coord    coordination.Coordinator
 	workers  int
@@ -56,10 +57,15 @@ type Engine struct {
 }
 
 func New(s store.Repository, bus *events.Bus, executor Executor, q queue.Queue, coord coordination.Coordinator, workers int, retry RetryPolicy) *Engine {
+	resolver := agentruntime.NewRegistry(agentruntime.AdaptLegacy(executor))
+	return NewWithResolver(s, bus, resolver, q, coord, workers, retry)
+}
+
+func NewWithResolver(s store.Repository, bus *events.Bus, resolver agentruntime.Resolver, q queue.Queue, coord coordination.Coordinator, workers int, retry RetryPolicy) *Engine {
 	return &Engine{
 		store:    s,
 		events:   bus,
-		executor: executor,
+		resolver: resolver,
 		queue:    q,
 		coord:    coord,
 		workers:  workers,
@@ -156,6 +162,10 @@ func (e *Engine) execute(ctx context.Context, runID string) error {
 	if err != nil {
 		return e.failRun(ctx, run, fmt.Errorf("agent not found: %w", err))
 	}
+	implementation, err := e.resolver.Resolve(agent)
+	if err != nil {
+		return e.failRun(ctx, run, fmt.Errorf("resolve runtime for agent %s: %w", agent.ID, err))
+	}
 
 	if run.MaxAttempts < 1 {
 		run.MaxAttempts = e.retry.MaxAttempts
@@ -174,9 +184,11 @@ func (e *Engine) execute(ctx context.Context, runID string) error {
 		}
 		e.publish(run.ID, "run.started", fmt.Sprintf("attempt %d of %d started", run.Attempt, run.MaxAttempts))
 
-		output, executeErr := e.executor.Execute(ctx, agent, run.Input)
+		result, executeErr := implementation.Execute(ctx, agentruntime.ExecutionRequest{
+			RunID: run.ID, Agent: agent, Attempt: run.Attempt, Input: run.Input,
+		})
 		if executeErr == nil {
-			if err := run.Succeed(output, time.Now()); err != nil {
+			if err := run.Succeed(result.Output, time.Now()); err != nil {
 				return err
 			}
 			if err := e.store.UpdateRun(ctx, run); err != nil {

@@ -15,6 +15,7 @@ import (
 	"github.com/thiagomontozo/agentmesh/internal/engine"
 	"github.com/thiagomontozo/agentmesh/internal/events"
 	"github.com/thiagomontozo/agentmesh/internal/queue"
+	agentruntime "github.com/thiagomontozo/agentmesh/internal/runtime"
 	"github.com/thiagomontozo/agentmesh/internal/store"
 )
 
@@ -127,19 +128,19 @@ func TestCreateAgentWithExecutionMetadataAndList(t *testing.T) {
 	runResponse := httptest.NewRecorder()
 	server.Handler().ServeHTTP(runResponse, runRequest)
 	if runResponse.Code != http.StatusAccepted {
-		t.Fatalf("expected demo run status 202, got %d: %s", runResponse.Code, runResponse.Body.String())
+		t.Fatalf("expected run status 202, got %d: %s", runResponse.Code, runResponse.Body.String())
 	}
 	var run domain.Run
 	if err := json.Unmarshal(runResponse.Body.Bytes(), &run); err != nil {
 		t.Fatal(err)
 	}
-	waitForRunStatus(t, server.store, run.ID, domain.RunSucceeded)
+	waitForRunStatus(t, server.store, run.ID, domain.RunFailed)
 	completed, err := server.store.GetRun(context.Background(), run.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if completed.Output != `Agent "Legal Agent" processed: hello` {
-		t.Fatalf("configured agent did not preserve demo execution behavior: %+v", completed)
+	if !strings.Contains(completed.Error, agentruntime.ErrUnknownRuntime.Error()) {
+		t.Fatalf("configured unknown runtime did not fail explicitly: %+v", completed)
 	}
 }
 

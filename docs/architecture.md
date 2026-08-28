@@ -6,7 +6,7 @@ AgentMesh has two runtime modes that share the same HTTP, domain, engine, and ex
 
 Agent definitions can optionally declare `runtime`, `protocol`, `endpoint`, and `capabilities`. These fields describe how an agent may be executed by future runtime adapters; capabilities are metadata only. Legacy definitions without execution metadata remain valid and continue to use the deterministic demo executor.
 
-The current engine behavior is intentionally unchanged: execution metadata is persisted and exposed by the API, but it is not resolved or invoked yet.
+The Engine now resolves this metadata before starting an attempt. An empty runtime preserves legacy behavior by resolving to `demo`; an unknown runtime fails explicitly and is not silently executed by the demo implementation.
 
 ## Runtime contract
 
@@ -20,9 +20,18 @@ Runtime.Execute(context.Context, request)
 ExecutionResult (Output) or error
 ```
 
-`Agent.ID` is the single source of truth for the Agent ID inside the request. The package also provides `AdaptLegacy`, which wraps executors using the current `engine.Executor` method shape. This keeps `DemoExecutor` compatible while avoiding an import dependency from the runtime package to the engine.
+`Agent.ID` is the single source of truth for the Agent ID inside the request. The package also provides `AdaptLegacy`, which wraps executors using the existing `engine.Executor` method shape. This keeps `DemoExecutor` compatible while avoiding an import dependency from the runtime package to the engine.
 
-The Engine still invokes its existing low-level `Executor` directly. Runtime resolution is deliberately not part of this stage and will be introduced separately.
+`runtime.Registry` is a concurrency-safe resolver keyed by normalized runtime name:
+
+```text
+Engine.execute
+        ↓ Agent already selected by Run.AgentID
+Runtime Resolver
+        └── demo → AdaptLegacy(DemoExecutor)
+```
+
+`engine.New` preserves the original constructor and installs the demo adapter. `engine.NewWithResolver` supports explicit runtime wiring. The Engine only constructs `ExecutionRequest`, calls `Resolver.Resolve(agent)`, and invokes the returned `Runtime`; it contains no runtime-specific switch and performs no Agent routing. HTTP execution is not implemented at this stage.
 
 ## Memory mode
 

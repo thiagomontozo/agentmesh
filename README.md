@@ -29,10 +29,11 @@ flowchart LR
     Q --> W1[Worker 1]
     Q --> W2[Worker 2]
     Q --> WN[Worker N]
-    W1 --> E[Executor Interface]
-    W2 --> E
-    WN --> E
-    E --> S
+    W1 --> RR[Runtime Resolver]
+    W2 --> RR
+    WN --> RR
+    RR --> D[Demo Runtime]
+    D --> S
     W1 --> B[Event Bus]
     W2 --> B
     WN --> B
@@ -42,7 +43,7 @@ flowchart LR
     Q -. distributed .-> N[NATS JetStream]
 ```
 
-The executor is an interface. The current `DemoExecutor` is deliberately deterministic; future providers can call OpenAI-compatible APIs, local inference servers, or MCP-enabled runtimes without changing the HTTP layer.
+The Engine resolves the already-selected Agent's runtime through a concurrency-safe registry. Legacy Agents and Agents declaring `runtime: "demo"` use the deterministic `DemoExecutor` through an adapter. New runtime implementations can be registered without adding runtime-specific branching to the Engine; remote HTTP execution is not implemented yet.
 
 ## Features
 
