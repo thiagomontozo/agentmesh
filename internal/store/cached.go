@@ -105,6 +105,10 @@ func (c *Cached) GetRun(ctx context.Context, id string) (domain.Run, error) {
 	return run, nil
 }
 
+func (c *Cached) GetRunByIdempotencyKey(ctx context.Context, key string) (domain.Run, error) {
+	return c.inner.GetRunByIdempotencyKey(ctx, key)
+}
+
 func (c *Cached) UpdateRun(ctx context.Context, run domain.Run) error {
 	if err := c.inner.UpdateRun(ctx, run); err != nil {
 		if errors.Is(err, ErrRunCanceled) || errors.Is(err, ErrStaleExecution) {
@@ -145,6 +149,10 @@ func (c *Cached) CancelRun(ctx context.Context, id string, at time.Time) (domain
 
 func (c *Cached) ListRuns(ctx context.Context) ([]domain.Run, error) {
 	return c.inner.ListRuns(ctx)
+}
+
+func (c *Cached) CountActiveRunsByAgent(ctx context.Context, agentIDs []string) (map[string]int, error) {
+	return c.inner.CountActiveRunsByAgent(ctx, agentIDs)
 }
 
 func (c *Cached) ListPendingRuns(ctx context.Context) ([]PendingRun, error) {

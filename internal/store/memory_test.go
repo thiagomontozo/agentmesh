@@ -197,6 +197,28 @@ func TestMemoryFindAgentsCombinesDeclaredFilters(t *testing.T) {
 	}
 }
 
+func TestMemoryCountsOnlyActiveRunsForRequestedAgents(t *testing.T) {
+	memory := NewMemory()
+	ctx := context.Background()
+	for _, run := range []domain.Run{
+		{ID: "run_queued", AgentID: "agt_a", Status: domain.RunQueued, MaxAttempts: 1},
+		{ID: "run_running", AgentID: "agt_a", Status: domain.RunRunning, MaxAttempts: 1},
+		{ID: "run_done", AgentID: "agt_a", Status: domain.RunSucceeded, MaxAttempts: 1},
+		{ID: "run_other", AgentID: "agt_b", Status: domain.RunQueued, MaxAttempts: 1},
+	} {
+		if _, _, err := memory.CreateRun(ctx, run, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	counts, err := memory.CountActiveRunsByAgent(ctx, []string{"agt_a", "agt_missing"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if counts["agt_a"] != 2 || counts["agt_missing"] != 0 || len(counts) != 2 {
+		t.Fatalf("unexpected active counts: %#v", counts)
+	}
+}
+
 func TestMemoryRunLifecycle(t *testing.T) {
 	ctx := context.Background()
 	memory := NewMemory()

@@ -176,7 +176,9 @@ func TestCreateAgentWithExecutionMetadataAndList(t *testing.T) {
 		"runtime":"REMOTE",
 		"protocol":"HTTP",
 		"endpoint":"http://legal-agent:9000",
-		"capabilities":["legal-search","legal-analysis","summarization"]
+		"capabilities":["legal-search","legal-analysis","summarization"],
+		"max_concurrency":8,
+		"priority":50
 	}`
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(body))
 	response := httptest.NewRecorder()
@@ -194,6 +196,9 @@ func TestCreateAgentWithExecutionMetadataAndList(t *testing.T) {
 	}
 	if len(created.Capabilities) != 3 || created.Capabilities[0] != "legal-search" {
 		t.Fatalf("unexpected capabilities: %#v", created.Capabilities)
+	}
+	if created.MaxConcurrency != 8 || created.Priority != 50 {
+		t.Fatalf("unexpected routing metadata: %+v", created)
 	}
 
 	getRequest := httptest.NewRequest(http.MethodGet, "/api/v1/agents/"+created.ID, nil)
@@ -389,6 +394,45 @@ func TestCreateRunRoutesByRequiredCapabilitiesAndKeepsManualSelection(t *testing
 	}
 }
 
+func TestLoadRoutingReturns429ButIdempotentReplayBypassesRerouting(t *testing.T) {
+	server, _ := newTestServer(t)
+	health := healthMapRegistry{states: make(map[string]agenthealth.Status)}
+	server.SetAgentHealth(health)
+	agent, err := server.store.CreateAgent(context.Background(), domain.Agent{
+		ID: "agt_capacity", Name: "Capacity", Capabilities: []string{"testing"}, MaxConcurrency: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	health.states[agent.ID] = agenthealth.StatusHealthy
+	existing := domain.Run{
+		ID: "run_existing", AgentID: agent.ID, RequiredCapabilities: []string{"testing"},
+		Input: "same", Status: domain.RunQueued, MaxAttempts: 1, CreatedAt: time.Now().UTC(),
+	}
+	if _, _, err := server.store.CreateRun(context.Background(), existing, "capacity-replay"); err != nil {
+		t.Fatal(err)
+	}
+
+	replay := httptest.NewRequest(http.MethodPost, "/api/v1/runs", strings.NewReader(
+		`{"required_capabilities":["TESTING"],"input":"same"}`,
+	))
+	replay.Header.Set("Idempotency-Key", "capacity-replay")
+	replayResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(replayResponse, replay)
+	if replayResponse.Code != http.StatusOK || replayResponse.Header().Get("Idempotency-Replayed") != "true" {
+		t.Fatalf("saturated idempotent replay failed: %d %s", replayResponse.Code, replayResponse.Body.String())
+	}
+
+	newRequest := httptest.NewRequest(http.MethodPost, "/api/v1/runs", strings.NewReader(
+		`{"required_capabilities":["testing"],"input":"new"}`,
+	))
+	newResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(newResponse, newRequest)
+	if newResponse.Code != http.StatusTooManyRequests {
+		t.Fatalf("expected saturated routing 429, got %d: %s", newResponse.Code, newResponse.Body.String())
+	}
+}
+
 func TestAgentUpdateDeleteAndConcurrencyAPI(t *testing.T) {
 	server, _ := newTestServer(t)
 	health := &recordingAgentHealth{}
@@ -405,7 +449,8 @@ func TestAgentUpdateDeleteAndConcurrencyAPI(t *testing.T) {
 	}
 	updateBody := `{
 		"name":"updated","system_prompt":"new prompt","runtime":"remote","protocol":"http",
-		"endpoint":"http://agent:9000","capabilities":["testing","debugging"]
+		"endpoint":"http://agent:9000","capabilities":["testing","debugging"],
+		"max_concurrency":3,"priority":10
 	}`
 	updateRequest := httptest.NewRequest(http.MethodPut, "/api/v1/agents/"+created.ID, strings.NewReader(updateBody))
 	updateRequest.Header.Set("If-Match", `"1"`)
@@ -419,7 +464,8 @@ func TestAgentUpdateDeleteAndConcurrencyAPI(t *testing.T) {
 		t.Fatal(err)
 	}
 	if updated.Version != 2 || updated.Name != "updated" || !updated.CreatedAt.Equal(created.CreatedAt) ||
-		len(updated.Capabilities) != 2 || updated.UpdatedAt.Before(created.UpdatedAt) {
+		len(updated.Capabilities) != 2 || updated.MaxConcurrency != 3 || updated.Priority != 10 ||
+		updated.UpdatedAt.Before(created.UpdatedAt) {
 		t.Fatalf("unexpected updated Agent: %+v", updated)
 	}
 
@@ -538,6 +584,8 @@ func TestCreateAgentRejectsInvalidExecutionMetadata(t *testing.T) {
 		`{"name":"invalid","runtime":"remote","endpoint":"http://agent:9000"}`,
 		`{"name":"invalid","runtime":"remote","protocol":"http","endpoint":"/v1/runs"}`,
 		`{"name":"invalid","capabilities":["testing",""]}`,
+		`{"name":"invalid","max_concurrency":-1}`,
+		`{"name":"invalid","priority":1001}`,
 	}
 	for _, body := range tests {
 		server, _ := newTestServer(t)

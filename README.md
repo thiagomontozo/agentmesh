@@ -85,6 +85,7 @@ The Engine resolves the already-selected Agent's runtime through a concurrency-s
 - Normalized, deduplicated Agent capabilities with exact indexed lookup
 - Deterministic Agent discovery by capability, runtime, protocol, and derived health
 - Deterministic capability Router with health exclusion and explicit unknown fallback
+- Load-aware routing by active Runs, declared capacity, and deterministic priority
 - Restart recovery for queued/running work
 
 ## API

@@ -8,16 +8,18 @@ import (
 )
 
 type Agent struct {
-	ID           string    `json:"id"`
-	Name         string    `json:"name"`
-	SystemPrompt string    `json:"system_prompt"`
-	Runtime      string    `json:"runtime,omitempty"`
-	Protocol     string    `json:"protocol,omitempty"`
-	Endpoint     string    `json:"endpoint,omitempty"`
-	Capabilities []string  `json:"capabilities,omitempty"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
-	Version      int64     `json:"version"`
+	ID             string    `json:"id"`
+	Name           string    `json:"name"`
+	SystemPrompt   string    `json:"system_prompt"`
+	Runtime        string    `json:"runtime,omitempty"`
+	Protocol       string    `json:"protocol,omitempty"`
+	Endpoint       string    `json:"endpoint,omitempty"`
+	Capabilities   []string  `json:"capabilities,omitempty"`
+	MaxConcurrency int       `json:"max_concurrency,omitempty"`
+	Priority       int       `json:"priority,omitempty"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+	Version        int64     `json:"version"`
 }
 
 func (a *Agent) InitializeForCreate(now time.Time) error {
@@ -75,6 +77,12 @@ func (a *Agent) NormalizeAndValidate() error {
 		if err != nil || parsed.Scheme == "" || (parsed.Host == "" && parsed.Opaque == "" && parsed.Path == "") {
 			return fmt.Errorf("endpoint must be an absolute URI")
 		}
+	}
+	if a.MaxConcurrency < 0 {
+		return fmt.Errorf("max_concurrency cannot be negative")
+	}
+	if a.Priority < -1000 || a.Priority > 1000 {
+		return fmt.Errorf("priority must be between -1000 and 1000")
 	}
 
 	normalizedCapabilities := make([]string, 0, len(a.Capabilities))

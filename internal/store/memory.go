@@ -211,6 +211,16 @@ func (m *Memory) GetRun(_ context.Context, id string) (domain.Run, error) {
 	return cloneRun(run), nil
 }
 
+func (m *Memory) GetRunByIdempotencyKey(_ context.Context, key string) (domain.Run, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	runID, ok := m.idempotencyKeys[key]
+	if !ok {
+		return domain.Run{}, ErrNotFound
+	}
+	return cloneRun(m.runs[runID]), nil
+}
+
 func (m *Memory) UpdateRun(_ context.Context, run domain.Run) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -288,6 +298,24 @@ func (m *Memory) ListRuns(_ context.Context) ([]domain.Run, error) {
 		result = append(result, cloneRun(run))
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].CreatedAt.Before(result[j].CreatedAt) })
+	return result, nil
+}
+
+func (m *Memory) CountActiveRunsByAgent(_ context.Context, agentIDs []string) (map[string]int, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	result := make(map[string]int, len(agentIDs))
+	for _, id := range agentIDs {
+		result[id] = 0
+	}
+	for _, run := range m.runs {
+		if run.Status != domain.RunQueued && run.Status != domain.RunRunning {
+			continue
+		}
+		if _, requested := result[run.AgentID]; requested {
+			result[run.AgentID]++
+		}
+	}
 	return result, nil
 }
 

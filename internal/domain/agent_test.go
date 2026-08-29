@@ -30,7 +30,8 @@ func TestAgentNormalizesExecutionMetadata(t *testing.T) {
 	agent := Agent{
 		ID: " agt_remote ", Name: " Legal Agent ", SystemPrompt: " Be precise ",
 		Runtime: " REMOTE ", Protocol: " HTTP ", Endpoint: " http://legal-agent:9000 ",
-		Capabilities: []string{" legal-search ", "summarization"},
+		Capabilities:   []string{" legal-search ", "summarization"},
+		MaxConcurrency: 4, Priority: 25,
 	}
 	if err := agent.NormalizeAndValidate(); err != nil {
 		t.Fatal(err)
@@ -43,6 +44,9 @@ func TestAgentNormalizesExecutionMetadata(t *testing.T) {
 	}
 	if len(agent.Capabilities) != 2 || agent.Capabilities[0] != "legal-search" {
 		t.Fatalf("unexpected capabilities: %#v", agent.Capabilities)
+	}
+	if agent.MaxConcurrency != 4 || agent.Priority != 25 {
+		t.Fatalf("unexpected routing metadata: %+v", agent)
 	}
 }
 
@@ -70,6 +74,8 @@ func TestAgentRejectsInvalidExecutionMetadata(t *testing.T) {
 		{name: "relative endpoint", agent: Agent{ID: "agt_1", Name: "test", Runtime: "remote", Protocol: "http", Endpoint: "/v1/runs"}},
 		{name: "blank capability", agent: Agent{ID: "agt_1", Name: "test", Capabilities: []string{" "}}},
 		{name: "invalid capability", agent: Agent{ID: "agt_1", Name: "test", Capabilities: []string{"legal/search"}}},
+		{name: "negative max concurrency", agent: Agent{ID: "agt_1", Name: "test", MaxConcurrency: -1}},
+		{name: "priority too high", agent: Agent{ID: "agt_1", Name: "test", Priority: 1001}},
 	}
 
 	for _, test := range tests {
