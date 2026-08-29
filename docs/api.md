@@ -41,7 +41,9 @@ curl -X POST http://localhost:8080/api/v1/agents \
   }'
 ```
 
-`runtime` and `protocol` are extensible lowercase identifiers. For remote HTTP execution, use `runtime: "remote"` and `protocol: "http"`; `endpoint` is an HTTP or HTTPS base URL and AgentMesh calls its `/v1/runs` path using [Agent Protocol V1](agent-protocol-v1.md). Capabilities remain metadata only: AgentMesh does not route by capability.
+`runtime` and `protocol` are extensible lowercase identifiers. For remote HTTP execution, use `runtime: "remote"` and `protocol: "http"`; `endpoint` is an HTTP or HTTPS base URL and AgentMesh calls its `/v1/runs` path using [Agent Protocol V1](agent-protocol-v1.md).
+
+Capabilities are normalized identifier keys: case is folded to lowercase, spaces/underscores become hyphens, repeated separators collapse, and duplicates are removed while preserving declaration order. For example, `"Legal Analysis"`, `"legal_analysis"`, and `"legal-analysis"` all become `"legal-analysis"`. They remain declared metadata rather than an automatic routing decision.
 
 Agent responses include `version`, `created_at`, `updated_at`, and a strong numeric `ETag`. Updates are full replacements and require the current ETag:
 
@@ -73,8 +75,11 @@ List or fetch agents:
 
 ```bash
 curl http://localhost:8080/api/v1/agents
+curl 'http://localhost:8080/api/v1/agents?capability=legal-analysis'
 curl http://localhost:8080/api/v1/agents/agt_REPLACE_ME
 ```
+
+The optional `capability` filter performs an exact lookup on the normalized key. PostgreSQL backs this query with a GIN index. It does not perform semantic matching or select an Agent for a Run.
 
 Read the derived operational status of an Agent:
 

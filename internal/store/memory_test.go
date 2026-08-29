@@ -156,6 +156,26 @@ func TestMemoryPersistsAgentExecutionMetadata(t *testing.T) {
 	}
 }
 
+func TestMemoryListsAgentsByCanonicalCapability(t *testing.T) {
+	memory := NewMemory()
+	ctx := context.Background()
+	for _, agent := range []domain.Agent{
+		{ID: "agt_legal", Name: "Legal", Capabilities: []string{"Legal Analysis", "legal_analysis"}},
+		{ID: "agt_code", Name: "Code", Capabilities: []string{"code-review"}},
+	} {
+		if _, err := memory.CreateAgent(ctx, agent); err != nil {
+			t.Fatal(err)
+		}
+	}
+	agents, err := memory.ListAgentsByCapability(ctx, " LEGAL_ANALYSIS ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(agents) != 1 || agents[0].ID != "agt_legal" || len(agents[0].Capabilities) != 1 {
+		t.Fatalf("unexpected capability result: %#v", agents)
+	}
+}
+
 func TestMemoryRunLifecycle(t *testing.T) {
 	ctx := context.Background()
 	memory := NewMemory()

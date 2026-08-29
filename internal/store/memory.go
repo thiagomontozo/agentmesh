@@ -138,8 +138,37 @@ func (m *Memory) ListAgents(_ context.Context) ([]domain.Agent, error) {
 	for _, agent := range m.agents {
 		result = append(result, cloneAgent(agent))
 	}
-	sort.Slice(result, func(i, j int) bool { return result[i].CreatedAt.Before(result[j].CreatedAt) })
+	sortAgents(result)
 	return result, nil
+}
+
+func (m *Memory) ListAgentsByCapability(_ context.Context, capability string) ([]domain.Agent, error) {
+	capability, err := domain.NormalizeCapability(capability)
+	if err != nil {
+		return nil, err
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	result := make([]domain.Agent, 0)
+	for _, agent := range m.agents {
+		for _, candidate := range agent.Capabilities {
+			if candidate == capability {
+				result = append(result, cloneAgent(agent))
+				break
+			}
+		}
+	}
+	sortAgents(result)
+	return result, nil
+}
+
+func sortAgents(agents []domain.Agent) {
+	sort.Slice(agents, func(i, j int) bool {
+		if agents[i].CreatedAt.Equal(agents[j].CreatedAt) {
+			return agents[i].ID < agents[j].ID
+		}
+		return agents[i].CreatedAt.Before(agents[j].CreatedAt)
+	})
 }
 
 func (m *Memory) CreateRun(_ context.Context, run domain.Run, idempotencyKey string) (domain.Run, bool, error) {

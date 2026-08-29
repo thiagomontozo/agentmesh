@@ -46,6 +46,18 @@ func TestAgentNormalizesExecutionMetadata(t *testing.T) {
 	}
 }
 
+func TestAgentNormalizesAndDeduplicatesCapabilities(t *testing.T) {
+	agent := Agent{ID: "agt_1", Name: "test", Capabilities: []string{
+		" Legal Search ", "legal_search", "LEGAL--SEARCH", "summarization.v1",
+	}}
+	if err := agent.NormalizeAndValidate(); err != nil {
+		t.Fatal(err)
+	}
+	if len(agent.Capabilities) != 2 || agent.Capabilities[0] != "legal-search" || agent.Capabilities[1] != "summarization.v1" {
+		t.Fatalf("unexpected canonical capabilities: %#v", agent.Capabilities)
+	}
+}
+
 func TestAgentRejectsInvalidExecutionMetadata(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -57,6 +69,7 @@ func TestAgentRejectsInvalidExecutionMetadata(t *testing.T) {
 		{name: "endpoint without protocol", agent: Agent{ID: "agt_1", Name: "test", Runtime: "remote", Endpoint: "http://agent:9000"}},
 		{name: "relative endpoint", agent: Agent{ID: "agt_1", Name: "test", Runtime: "remote", Protocol: "http", Endpoint: "/v1/runs"}},
 		{name: "blank capability", agent: Agent{ID: "agt_1", Name: "test", Capabilities: []string{" "}}},
+		{name: "invalid capability", agent: Agent{ID: "agt_1", Name: "test", Capabilities: []string{"legal/search"}}},
 	}
 
 	for _, test := range tests {

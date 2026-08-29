@@ -229,6 +229,37 @@ func TestCreateAgentWithExecutionMetadataAndList(t *testing.T) {
 	}
 }
 
+func TestListAgentsFiltersByCanonicalCapability(t *testing.T) {
+	server, _ := newTestServer(t)
+	for _, body := range []string{
+		`{"name":"Legal","capabilities":["Legal Analysis","legal_analysis"]}`,
+		`{"name":"Code","capabilities":["code-review"]}`,
+	} {
+		request := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(body))
+		response := httptest.NewRecorder()
+		server.Handler().ServeHTTP(response, request)
+		if response.Code != http.StatusCreated {
+			t.Fatalf("create failed: %d %s", response.Code, response.Body.String())
+		}
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/agents?capability=LEGAL_ANALYSIS", nil)
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"name":"Legal"`) ||
+		strings.Contains(response.Body.String(), `"name":"Code"`) ||
+		!strings.Contains(response.Body.String(), `"capabilities":["legal-analysis"]`) {
+		t.Fatalf("unexpected filtered response: %d %s", response.Code, response.Body.String())
+	}
+
+	invalid := httptest.NewRequest(http.MethodGet, "/api/v1/agents?capability=legal%2Fanalysis", nil)
+	invalidResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(invalidResponse, invalid)
+	if invalidResponse.Code != http.StatusBadRequest {
+		t.Fatalf("expected invalid capability rejection, got %d: %s", invalidResponse.Code, invalidResponse.Body.String())
+	}
+}
+
 func TestAgentUpdateDeleteAndConcurrencyAPI(t *testing.T) {
 	server, _ := newTestServer(t)
 	health := &recordingAgentHealth{}

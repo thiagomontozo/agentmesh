@@ -146,7 +146,18 @@ func (s *Server) getAgentHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listAgents(w http.ResponseWriter, r *http.Request) {
-	agents, err := s.store.ListAgents(r.Context())
+	capability := strings.TrimSpace(r.URL.Query().Get("capability"))
+	var agents []domain.Agent
+	var err error
+	if capability == "" {
+		agents, err = s.store.ListAgents(r.Context())
+	} else {
+		if _, validationErr := domain.NormalizeCapability(capability); validationErr != nil {
+			writeError(w, http.StatusBadRequest, validationErr.Error())
+			return
+		}
+		agents, err = s.store.ListAgentsByCapability(r.Context(), capability)
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not list agents")
 		return

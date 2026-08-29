@@ -23,6 +23,7 @@ type AgentRepository interface {
 	CreateAgent(ctx context.Context, agent domain.Agent) (domain.Agent, error)
 	GetAgent(ctx context.Context, id string) (domain.Agent, error)
 	ListAgents(ctx context.Context) ([]domain.Agent, error)
+	ListAgentsByCapability(ctx context.Context, capability string) ([]domain.Agent, error)
 	UpdateAgent(ctx context.Context, agent domain.Agent, expectedVersion int64) (domain.Agent, error)
 	DeleteAgent(ctx context.Context, id string, expectedVersion int64) error
 }

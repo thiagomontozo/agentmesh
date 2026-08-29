@@ -109,6 +109,13 @@ func TestDistributedRunLifecycleAndIdempotency(t *testing.T) {
 	if !foundConfigured {
 		t.Fatalf("configured agent was not listed with its capabilities: %+v", agents)
 	}
+	byCapability, err := repository.ListAgentsByCapability(ctx, " OBSERVABILITY ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(byCapability) != 1 || byCapability[0].ID != configuredAgent.ID {
+		t.Fatalf("PostgreSQL capability query returned unexpected Agents: %+v", byCapability)
+	}
 	disposable, err := repository.CreateAgent(ctx, domain.Agent{ID: "agt_disposable_" + suffix, Name: "disposable"})
 	if err != nil {
 		t.Fatal(err)
