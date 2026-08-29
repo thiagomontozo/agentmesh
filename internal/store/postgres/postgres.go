@@ -92,17 +92,19 @@ func (r *Repository) CreateAgent(ctx context.Context, agent domain.Agent) (domai
 	if err := agent.InitializeForCreate(time.Now()); err != nil {
 		return domain.Agent{}, err
 	}
-	_, err := r.pool.Exec(ctx,
+	created, err := scanAgent(r.pool.QueryRow(ctx,
 		`INSERT INTO agents (
 			id, name, system_prompt, runtime, protocol, endpoint, capabilities, created_at, updated_at, version
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		RETURNING id, name, system_prompt, runtime, protocol, endpoint, capabilities,
+			created_at, updated_at, version`,
 		agent.ID, agent.Name, agent.SystemPrompt, agent.Runtime, agent.Protocol,
 		agent.Endpoint, agent.Capabilities, agent.CreatedAt, agent.UpdatedAt, agent.Version,
-	)
+	))
 	if err != nil {
 		return domain.Agent{}, fmt.Errorf("insert agent: %w", err)
 	}
-	return agent, nil
+	return created, nil
 }
 
 const agentSelect = `SELECT id, name, system_prompt, runtime, protocol, endpoint, capabilities,
