@@ -199,7 +199,7 @@ func (e *Engine) Cancel(ctx context.Context, runID string) (domain.Run, error) {
 	if cancelExecution != nil {
 		cancelExecution()
 	}
-	e.publish(run.ID, "run.canceled", "run canceled", run.Attempt)
+	e.publishRun(run, "run.canceled", "run canceled", run.Attempt)
 	attributes := runLogAttrs(ctx, run)
 	slog.InfoContext(ctx, "run canceled", attributes...)
 	return run, nil
@@ -347,7 +347,7 @@ func (e *Engine) execute(ctx context.Context, runID string) error {
 			}
 			return fmt.Errorf("persist run attempt: %w", err)
 		}
-		e.publish(run.ID, "run.started", fmt.Sprintf("attempt %d of %d started", run.Attempt, run.MaxAttempts), run.Attempt)
+		e.publishRun(run, "run.started", fmt.Sprintf("attempt %d of %d started", run.Attempt, run.MaxAttempts), run.Attempt)
 		slog.InfoContext(ctx, "run attempt started", runLogAttrs(ctx, run)...)
 
 		attemptCtx, cancelAttempt := context.WithTimeout(runCtx, e.retry.AttemptTimeout)
@@ -367,7 +367,7 @@ func (e *Engine) execute(ctx context.Context, runID string) error {
 		}
 		if errors.Is(attemptContextErr, context.DeadlineExceeded) && !errors.Is(executeErr, ErrRuntimePanic) {
 			executeErr = fmt.Errorf("%w: attempt %d exceeded %s", ErrAttemptTimeout, run.Attempt, e.retry.AttemptTimeout)
-			e.publish(run.ID, "run.attempt_timed_out", executeErr.Error(), run.Attempt)
+			e.publishRun(run, "run.attempt_timed_out", executeErr.Error(), run.Attempt)
 			attributes := append(runLogAttrs(ctx, run), "timeout", e.retry.AttemptTimeout)
 			slog.WarnContext(ctx, "run attempt timed out", attributes...)
 		}
@@ -381,7 +381,7 @@ func (e *Engine) execute(ctx context.Context, runID string) error {
 				}
 				return fmt.Errorf("persist completed run: %w", err)
 			}
-			e.publish(run.ID, "run.succeeded", "run completed successfully", run.Attempt)
+			e.publishRun(run, "run.succeeded", "run completed successfully", run.Attempt)
 			slog.InfoContext(ctx, "run succeeded", runLogAttrs(ctx, run)...)
 			return nil
 		}
@@ -390,7 +390,7 @@ func (e *Engine) execute(ctx context.Context, runID string) error {
 		}
 
 		backoff := e.backoff(run.Attempt)
-		e.publish(run.ID, "run.retrying", fmt.Sprintf("attempt %d failed; retrying in %s: %v", run.Attempt, backoff, executeErr), run.Attempt)
+		e.publishRun(run, "run.retrying", fmt.Sprintf("attempt %d failed; retrying in %s: %v", run.Attempt, backoff, executeErr), run.Attempt)
 		attributes := append(runLogAttrs(ctx, run), "backoff", backoff, "error", executeErr)
 		slog.WarnContext(ctx, "run attempt failed; retrying", attributes...)
 		retryTimer := time.NewTimer(backoff)
@@ -454,7 +454,7 @@ func (e *Engine) failRun(ctx context.Context, run domain.Run, executionFence int
 		}
 		return fmt.Errorf("persist failed run: %w", updateErr)
 	}
-	e.publish(run.ID, "run.failed", err.Error(), run.Attempt)
+	e.publishRun(run, "run.failed", err.Error(), run.Attempt)
 	attributes := append(runLogAttrs(ctx, run), "error", err)
 	slog.ErrorContext(ctx, "run failed", attributes...)
 	if deadLetterErr := e.queue.DeadLetter(ctx, run.ID, err); deadLetterErr != nil {
@@ -468,6 +468,8 @@ func runLogAttrs(ctx context.Context, run domain.Run) []any {
 	return append(attributes,
 		"run_id", run.ID,
 		"agent_id", run.AgentID,
+		"parent_run_id", run.ParentRunID,
+		"root_run_id", run.RootRunID,
 		"attempt", run.Attempt,
 		"duration_ms", run.DurationMS,
 	)
@@ -488,11 +490,17 @@ func (e *Engine) backoff(attempt int) time.Duration {
 }
 
 func (e *Engine) publish(runID, eventType, message string, attempt int) {
+	e.publishRun(domain.Run{ID: runID}, eventType, message, attempt)
+}
+
+func (e *Engine) publishRun(run domain.Run, eventType, message string, attempt int) {
 	e.events.Publish(domain.RunEvent{
-		RunID:     runID,
-		Type:      eventType,
-		Message:   message,
-		Attempt:   attempt,
-		Timestamp: time.Now().UTC(),
+		RunID:       run.ID,
+		ParentRunID: run.ParentRunID,
+		RootRunID:   run.RootRunID,
+		Type:        eventType,
+		Message:     message,
+		Attempt:     attempt,
+		Timestamp:   time.Now().UTC(),
 	})
 }

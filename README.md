@@ -86,6 +86,7 @@ The Engine resolves the already-selected Agent's runtime through a concurrency-s
 - Deterministic Agent discovery by capability, runtime, protocol, and derived health
 - Deterministic capability Router with health exclusion and explicit unknown fallback
 - Load-aware routing by active Runs, declared capacity, and deterministic priority
+- Immutable parent/root Run lineage with direct-child lookup and events
 - Restart recovery for queued/running work
 
 ## API
@@ -103,6 +104,7 @@ The Engine resolves the already-selected Agent's runtime through a concurrency-s
 | `POST` | `/api/v1/runs` | Submit a Run by explicit Agent ID or required capabilities |
 | `GET` | `/api/v1/runs` | List runs |
 | `GET` | `/api/v1/runs/{id}` | Get run status/result |
+| `GET` | `/api/v1/runs/{id}/children` | List direct child Runs |
 | `POST` | `/api/v1/runs/{id}/cancel` | Cancel a queued or running Run |
 | `GET` | `/api/v1/runs/{id}/events` | Stream lifecycle events via SSE |
 

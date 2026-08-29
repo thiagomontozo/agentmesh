@@ -377,3 +377,58 @@ func TestMemoryRunEventHistoryRejectsMissingRun(t *testing.T) {
 		t.Fatalf("expected ErrNotFound, got %v", err)
 	}
 }
+
+func TestMemoryPersistsAndListsParentChildLineage(t *testing.T) {
+	memory := NewMemory()
+	ctx := context.Background()
+	root := domain.Run{ID: "run_root", Status: domain.RunSucceeded, MaxAttempts: 1, CreatedAt: time.Now().UTC()}
+	if _, _, err := memory.CreateRun(ctx, root, ""); err != nil {
+		t.Fatal(err)
+	}
+	child := domain.Run{
+		ID: "run_child", ParentRunID: root.ID, Status: domain.RunSucceeded,
+		MaxAttempts: 1, CreatedAt: root.CreatedAt.Add(time.Millisecond),
+	}
+	createdChild, _, err := memory.CreateRun(ctx, child, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if createdChild.ParentRunID != root.ID || createdChild.RootRunID != root.ID {
+		t.Fatalf("unexpected child lineage: %+v", createdChild)
+	}
+	grandchild := domain.Run{
+		ID: "run_grandchild", ParentRunID: child.ID, Status: domain.RunSucceeded,
+		MaxAttempts: 1, CreatedAt: root.CreatedAt.Add(2 * time.Millisecond),
+	}
+	createdGrandchild, _, err := memory.CreateRun(ctx, grandchild, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if createdGrandchild.ParentRunID != child.ID || createdGrandchild.RootRunID != root.ID {
+		t.Fatalf("unexpected grandchild lineage: %+v", createdGrandchild)
+	}
+	children, err := memory.ListChildRuns(ctx, root.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(children) != 1 || children[0].ID != child.ID {
+		t.Fatalf("children query must be direct only: %+v", children)
+	}
+}
+
+func TestMemoryRejectsInvalidRunLineageWithoutPoisoningIdempotency(t *testing.T) {
+	memory := NewMemory()
+	ctx := context.Background()
+	invalid := domain.Run{ID: "run_invalid", ParentRunID: "run_invalid", Status: domain.RunQueued, MaxAttempts: 1}
+	if _, _, err := memory.CreateRun(ctx, invalid, "lineage-key"); err == nil {
+		t.Fatal("expected self-parent rejection")
+	}
+	valid := domain.Run{ID: "run_valid", Status: domain.RunQueued, MaxAttempts: 1}
+	created, isNew, err := memory.CreateRun(ctx, valid, "lineage-key")
+	if err != nil || !isNew || created.ID != valid.ID {
+		t.Fatalf("invalid creation poisoned idempotency: run=%+v new=%v err=%v", created, isNew, err)
+	}
+	if _, err := memory.ListChildRuns(ctx, "missing"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected missing parent error, got %v", err)
+	}
+}

@@ -75,6 +75,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/runs", s.listRuns)
 	s.mux.HandleFunc("POST /api/v1/runs", s.createRun)
 	s.mux.HandleFunc("GET /api/v1/runs/{id}", s.getRun)
+	s.mux.HandleFunc("GET /api/v1/runs/{id}/children", s.listChildRuns)
 	s.mux.HandleFunc("POST /api/v1/runs/{id}/cancel", s.cancelRun)
 	s.mux.HandleFunc("GET /api/v1/runs/{id}/events", s.runEvents)
 }
@@ -340,6 +341,7 @@ func setAgentETag(w http.ResponseWriter, version int64) {
 
 type createRunRequest struct {
 	AgentID              string   `json:"agent_id"`
+	ParentRunID          string   `json:"parent_run_id"`
 	RequiredCapabilities []string `json:"required_capabilities"`
 	Input                string   `json:"input"`
 }
@@ -352,6 +354,7 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 	}
 
 	request.AgentID = strings.TrimSpace(request.AgentID)
+	request.ParentRunID = strings.TrimSpace(request.ParentRunID)
 	request.Input = strings.TrimSpace(request.Input)
 	if request.Input == "" {
 		writeError(w, http.StatusBadRequest, "input is required")
@@ -390,6 +393,19 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	var parentRun domain.Run
+	if request.ParentRunID != "" {
+		var err error
+		parentRun, err = s.store.GetRun(r.Context(), request.ParentRunID)
+		if errors.Is(err, store.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "parent Run not found")
+			return
+		}
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "could not load parent Run")
+			return
+		}
+	}
 	if routed {
 		decision, err := s.agentRouter.Select(r.Context(), request.RequiredCapabilities)
 		if errors.Is(err, agentrouter.ErrInvalidRequirements) {
@@ -420,12 +436,19 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 	run := domain.Run{
 		ID:                   newID("run"),
 		AgentID:              request.AgentID,
+		ParentRunID:          request.ParentRunID,
 		RequiredCapabilities: request.RequiredCapabilities,
 		Input:                request.Input,
 		Status:               domain.RunQueued,
 		MaxAttempts:          s.engine.MaxAttempts(),
 		RequestID:            observability.RequestID(r.Context()),
 		CreatedAt:            time.Now().UTC(),
+	}
+	if request.ParentRunID != "" {
+		if err := run.AttachTo(parentRun); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 	}
 	createdRun, isNew, err := s.store.CreateRun(r.Context(), run, idempotencyKey)
 	if err != nil {
@@ -438,9 +461,19 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 	}
 	run = createdRun
 	s.events.Publish(domain.RunEvent{
-		RunID: run.ID, Type: "run.queued", Message: "run queued", Attempt: run.Attempt, Timestamp: time.Now().UTC(),
+		RunID: run.ID, ParentRunID: run.ParentRunID, RootRunID: run.RootRunID,
+		Type: "run.queued", Message: "run queued", Attempt: run.Attempt, Timestamp: time.Now().UTC(),
 	})
-	attributes := append(observability.ContextAttrs(r.Context()), "run_id", run.ID, "agent_id", run.AgentID, "attempt", run.Attempt)
+	if run.ParentRunID != "" {
+		s.events.Publish(domain.RunEvent{
+			RunID: run.ParentRunID, ChildRunID: run.ID, ParentRunID: run.ParentRunID, RootRunID: run.RootRunID,
+			Type: "run.child_queued", Message: "child Run queued", Timestamp: time.Now().UTC(),
+		})
+	}
+	attributes := append(observability.ContextAttrs(r.Context()),
+		"run_id", run.ID, "agent_id", run.AgentID, "parent_run_id", run.ParentRunID,
+		"root_run_id", run.RootRunID, "attempt", run.Attempt,
+	)
 	slog.InfoContext(r.Context(), "run queued", attributes...)
 
 	if err := s.engine.Enqueue(r.Context(), run.ID); err != nil {
@@ -453,7 +486,8 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.events.Publish(domain.RunEvent{
-			RunID: run.ID, Type: "run.failed", Message: err.Error(), Attempt: run.Attempt, Timestamp: time.Now().UTC(),
+			RunID: run.ID, ParentRunID: run.ParentRunID, RootRunID: run.RootRunID,
+			Type: "run.failed", Message: err.Error(), Attempt: run.Attempt, Timestamp: time.Now().UTC(),
 		})
 		writeError(w, http.StatusServiceUnavailable, err.Error())
 		return
@@ -464,6 +498,7 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) writeRunReplay(w http.ResponseWriter, r *http.Request, existing domain.Run, request createRunRequest, routed bool) {
 	requestChanged := existing.Input != request.Input ||
+		existing.ParentRunID != request.ParentRunID ||
 		!slices.Equal(existing.RequiredCapabilities, request.RequiredCapabilities)
 	if !routed {
 		requestChanged = requestChanged || existing.AgentID != request.AgentID
@@ -476,6 +511,19 @@ func (s *Server) writeRunReplay(w http.ResponseWriter, r *http.Request, existing
 	attributes := append(observability.ContextAttrs(r.Context()), "run_id", existing.ID, "agent_id", existing.AgentID)
 	slog.InfoContext(r.Context(), "run submission replayed", attributes...)
 	writeJSON(w, http.StatusOK, existing)
+}
+
+func (s *Server) listChildRuns(w http.ResponseWriter, r *http.Request) {
+	children, err := s.store.ListChildRuns(r.Context(), r.PathValue("id"))
+	if errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "Run not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not list child Runs")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": children})
 }
 
 func (s *Server) listRuns(w http.ResponseWriter, r *http.Request) {

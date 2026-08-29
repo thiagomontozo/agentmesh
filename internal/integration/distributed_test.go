@@ -283,6 +283,49 @@ func TestDistributedRunLifecycleAndIdempotency(t *testing.T) {
 	if err := repository.UpdateRunFenced(ctx, staleRecovery, activeFence); !errors.Is(err, store.ErrStaleExecution) {
 		t.Fatalf("recovered PostgreSQL Run accepted crashed owner: %v", err)
 	}
+	lineageRoot := domain.Run{
+		ID: "run_lineage_root_" + suffix, AgentID: agent.ID, Input: "root",
+		Status: domain.RunSucceeded, MaxAttempts: 1, CreatedAt: time.Now().UTC(),
+	}
+	if _, _, err := repository.CreateRun(ctx, lineageRoot, ""); err != nil {
+		t.Fatal(err)
+	}
+	lineageChild := domain.Run{
+		ID: "run_lineage_child_" + suffix, AgentID: agent.ID, ParentRunID: lineageRoot.ID,
+		Input: "child", Status: domain.RunSucceeded, MaxAttempts: 1, CreatedAt: time.Now().UTC(),
+	}
+	createdChild, _, err := repository.CreateRun(ctx, lineageChild, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lineageGrandchild := domain.Run{
+		ID: "run_lineage_grandchild_" + suffix, AgentID: agent.ID, ParentRunID: createdChild.ID,
+		Input: "grandchild", Status: domain.RunSucceeded, MaxAttempts: 1, CreatedAt: time.Now().UTC(),
+	}
+	createdGrandchild, _, err := repository.CreateRun(ctx, lineageGrandchild, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if createdChild.RootRunID != lineageRoot.ID || createdGrandchild.RootRunID != lineageRoot.ID {
+		t.Fatalf("PostgreSQL lineage was not derived: child=%+v grandchild=%+v", createdChild, createdGrandchild)
+	}
+	children, err := repository.ListChildRuns(ctx, lineageRoot.ID)
+	if err != nil || len(children) != 1 || children[0].ID != createdChild.ID {
+		t.Fatalf("PostgreSQL direct children query: children=%+v err=%v", children, err)
+	}
+	lineageEvent := domain.RunEvent{
+		ID: "evt_lineage_" + suffix, RunID: lineageRoot.ID, ChildRunID: createdChild.ID,
+		ParentRunID: lineageRoot.ID, RootRunID: lineageRoot.ID,
+		Type: "run.child_queued", Message: "child Run queued", Timestamp: time.Now().UTC(),
+	}
+	if err := repository.AppendRunEvent(ctx, lineageEvent, time.Hour, 10); err != nil {
+		t.Fatal(err)
+	}
+	lineageEvents, err := repository.ListRunEvents(ctx, lineageRoot.ID, 10)
+	if err != nil || len(lineageEvents) != 1 || lineageEvents[0].ChildRunID != createdChild.ID ||
+		lineageEvents[0].RootRunID != lineageRoot.ID {
+		t.Fatalf("PostgreSQL lineage event persistence: events=%+v err=%v", lineageEvents, err)
+	}
 	testRedisLeaseRenewal(t, ctx, redisCache, "integration:"+suffix)
 	testDistributedEventBus(t, natsURL, repository, agent.ID, "run_events_"+suffix)
 	testDistributedSSE(t, natsURL, repository, runEngine, agent.ID, suffix)

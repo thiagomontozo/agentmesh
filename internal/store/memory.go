@@ -195,6 +195,25 @@ func (m *Memory) CreateRun(_ context.Context, run domain.Run, idempotencyKey str
 		if runID, ok := m.idempotencyKeys[idempotencyKey]; ok {
 			return cloneRun(m.runs[runID]), false, nil
 		}
+	}
+	if run.ParentRunID == "" {
+		if run.RootRunID != "" {
+			return domain.Run{}, false, fmt.Errorf("root Run cannot declare root_run_id")
+		}
+	} else {
+		parent, ok := m.runs[run.ParentRunID]
+		if !ok {
+			return domain.Run{}, false, ErrNotFound
+		}
+		providedRoot := run.RootRunID
+		if err := run.AttachTo(parent); err != nil {
+			return domain.Run{}, false, err
+		}
+		if providedRoot != "" && providedRoot != run.RootRunID {
+			return domain.Run{}, false, fmt.Errorf("root_run_id does not match parent lineage")
+		}
+	}
+	if idempotencyKey != "" {
 		m.idempotencyKeys[idempotencyKey] = run.ID
 	}
 	m.runs[run.ID] = cloneRun(run)
@@ -234,6 +253,8 @@ func (m *Memory) UpdateRun(_ context.Context, run domain.Run) error {
 	if m.runFences[run.ID] != 0 {
 		return ErrStaleExecution
 	}
+	run.ParentRunID = existing.ParentRunID
+	run.RootRunID = existing.RootRunID
 	m.runs[run.ID] = cloneRun(run)
 	return nil
 }
@@ -272,6 +293,8 @@ func (m *Memory) UpdateRunFenced(_ context.Context, run domain.Run, fence int64)
 	if fence <= 0 || m.runFences[run.ID] != fence {
 		return ErrStaleExecution
 	}
+	run.ParentRunID = existing.ParentRunID
+	run.RootRunID = existing.RootRunID
 	m.runs[run.ID] = cloneRun(run)
 	return nil
 }
@@ -298,6 +321,27 @@ func (m *Memory) ListRuns(_ context.Context) ([]domain.Run, error) {
 		result = append(result, cloneRun(run))
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].CreatedAt.Before(result[j].CreatedAt) })
+	return result, nil
+}
+
+func (m *Memory) ListChildRuns(_ context.Context, parentRunID string) ([]domain.Run, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if _, ok := m.runs[parentRunID]; !ok {
+		return nil, ErrNotFound
+	}
+	result := make([]domain.Run, 0)
+	for _, run := range m.runs {
+		if run.ParentRunID == parentRunID {
+			result = append(result, cloneRun(run))
+		}
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].CreatedAt.Equal(result[j].CreatedAt) {
+			return result[i].ID < result[j].ID
+		}
+		return result[i].CreatedAt.Before(result[j].CreatedAt)
+	})
 	return result, nil
 }
 
