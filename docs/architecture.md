@@ -123,6 +123,8 @@ The capacity check is advisory rather than an atomic reservation: simultaneous r
 
 The Router remains deterministic and declared-input-only: it does not inspect natural-language input, use LLMs or embeddings, or discover capabilities implicitly. Health remains replica-local, so replicas can make different decisions while their probe state converges; the persisted Run and idempotency contract remain authoritative after creation. Idempotency lookup occurs before routing so a saturated original Agent cannot block replay.
 
+Semantic routing remains analysis-only. The comparison, security constraints, evaluation gates, and recommended gated hybrid are documented in [Semantic / LLM Router Analysis](semantic-router-analysis.md).
+
 ## Agent Registry lifecycle
 
 Agent definitions have immutable `id` and `created_at`, mutable execution metadata, `updated_at`, and a monotonic `version`. `PUT` performs a validated full replacement, while Memory and PostgreSQL compare the supplied version atomically before incrementing it. API mutations require a strong numeric `If-Match`, so concurrent writers cannot silently overwrite each other. Redis is refreshed after success and invalidated after conflicts to avoid retaining stale versions.
