@@ -74,6 +74,7 @@ The Engine resolves the already-selected Agent's runtime through a concurrency-s
 - Automatic execution-lease renewal for long-running Runs
 - Monotonic fencing tokens for stale-worker write protection
 - Lease-aware multi-replica recovery for abandoned Runs
+- Cross-replica Run events and SSE through NATS pub/sub
 - Restart recovery for queued/running work
 
 ## API
@@ -182,7 +183,7 @@ internal/domain/        core domain models
 internal/engine/        queue, workers and executor abstraction
 internal/runtime/       runtime request/result contract and legacy adapter
 internal/protocol/v1/   language-neutral Agent Protocol V1 wire types
-internal/events/        in-process event bus
+internal/events/        bounded local bus + distributed NATS pub/sub
 internal/httpapi/       REST + SSE transport
 internal/queue/         memory and NATS JetStream queues
 internal/cache/         Redis cache adapter

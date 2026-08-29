@@ -6,12 +6,19 @@ import (
 	"github.com/thiagomontozo/agentmesh/internal/domain"
 )
 
+type Broker interface {
+	Publish(event domain.RunEvent)
+	Subscribe(runID string) (<-chan domain.RunEvent, func())
+}
+
 type Bus struct {
 	mu          sync.RWMutex
 	subscribers map[string]map[chan domain.RunEvent]struct{}
 	history     map[string][]domain.RunEvent
 	maxHistory  int
 }
+
+var _ Broker = (*Bus)(nil)
 
 func NewBus() *Bus {
 	return NewBusWithHistoryLimit(128)

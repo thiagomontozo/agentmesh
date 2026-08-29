@@ -55,3 +55,7 @@ A newer lease owner claimed the Run before this worker attempted to persist stat
 ## A running Run is not requeued when another replica starts
 
 This is intentional while its execution lease remains owned. Startup recovery no longer resets every `running` row. The new replica skips a healthy owner's Run; after the lease expires, a recovery pass can acquire ownership, advance the fence, and requeue it. Check Redis TTL/renewal state when an actually abandoned Run remains `running` longer than `AGENTMESH_LEASE_TTL`.
+
+## An SSE client missed events during a replica restart
+
+NATS pub/sub distributes live events across healthy replicas, but this stage does not persist event history. Each replica only replays its bounded in-memory history. If it was disconnected when an event was published or restarted afterward, query `GET /api/v1/runs/{id}` for authoritative state. Durable replay and `Last-Event-ID` remain pending.

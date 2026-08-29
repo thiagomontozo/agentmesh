@@ -94,7 +94,7 @@ Typical event names are:
 - `run.failed`
 - `run.canceled`
 
-The stream closes after a terminal event. The current event history is bounded and process-local; PostgreSQL remains the source of truth for final run state.
+The stream closes after a terminal event. In distributed mode, NATS pub/sub makes live events visible on every API replica, so SSE does not require sticky routing to the worker. Each replica keeps a bounded local history for late subscribers, but that history is not durable and cannot replay events missed while the replica was disconnected. PostgreSQL remains the source of truth for final Run state.
 
 ## Request validation
 

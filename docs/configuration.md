@@ -95,4 +95,5 @@ Runs interrupted by process shutdown remain recoverable. On startup, queued work
 - Preserve Redis AOF data in distributed deployments so coordination counters remain monotonic operationally; the repository claim remains authoritative for Run writes.
 - Runtimes must honor context cancellation; AgentMesh does not detach runtime calls into goroutines to force-stop implementations that ignore context.
 - Back up PostgreSQL and the JetStream storage directory.
-- The current SSE event bus is process-local; use sticky routing for SSE clients until durable cross-replica events are implemented.
+- Distributed SSE uses NATS pub/sub across replicas. Keep NATS available; publish failures are logged and only the publisher's local subscribers see the affected event.
+- Event history is bounded per replica and is not durable yet. Clients must query the Run resource for authoritative final state after reconnecting.

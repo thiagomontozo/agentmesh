@@ -6,8 +6,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,6 +19,7 @@ import (
 	"github.com/thiagomontozo/agentmesh/internal/domain"
 	"github.com/thiagomontozo/agentmesh/internal/engine"
 	"github.com/thiagomontozo/agentmesh/internal/events"
+	"github.com/thiagomontozo/agentmesh/internal/httpapi"
 	"github.com/thiagomontozo/agentmesh/internal/queue"
 	"github.com/thiagomontozo/agentmesh/internal/store"
 	postgresstore "github.com/thiagomontozo/agentmesh/internal/store/postgres"
@@ -217,6 +221,122 @@ func TestDistributedRunLifecycleAndIdempotency(t *testing.T) {
 		t.Fatalf("recovered PostgreSQL Run accepted crashed owner: %v", err)
 	}
 	testRedisLeaseRenewal(t, ctx, redisCache, "integration:"+suffix)
+	testDistributedEventBus(t, natsURL, "run_events_"+suffix)
+	testDistributedSSE(t, natsURL, repository, runEngine, agent.ID, suffix)
+}
+
+func testDistributedSSE(
+	t *testing.T,
+	natsURL string,
+	repository store.Repository,
+	runEngine *engine.Engine,
+	agentID string,
+	suffix string,
+) {
+	t.Helper()
+	run := domain.Run{
+		ID: "run_sse_" + suffix, AgentID: agentID, Input: "events", Status: domain.RunQueued,
+		MaxAttempts: 1, CreatedAt: time.Now().UTC(),
+	}
+	if _, _, err := repository.CreateRun(context.Background(), run, ""); err != nil {
+		t.Fatal(err)
+	}
+	busA, err := events.NewNATS(natsURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = busA.Close() }()
+	busB, err := events.NewNATS(natsURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = busB.Close() }()
+	api := httpapi.New(repository, runEngine, busA)
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/runs/"+run.ID+"/events", nil)
+	response := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		api.Handler().ServeHTTP(response, request)
+		close(done)
+	}()
+	time.Sleep(50 * time.Millisecond)
+	busB.Publish(domain.RunEvent{
+		RunID: run.ID, Type: "run.succeeded", Message: "remote replica completed", Timestamp: time.Now().UTC(),
+	})
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("SSE replica A did not receive terminal event from replica B")
+	}
+	body := response.Body.String()
+	if response.Code != http.StatusOK || !strings.Contains(body, "event: run.succeeded") || !strings.Contains(body, run.ID) {
+		t.Fatalf("unexpected distributed SSE response: status=%d body=%s", response.Code, body)
+	}
+}
+
+func testDistributedEventBus(t *testing.T, natsURL, runID string) {
+	t.Helper()
+	busA, err := events.NewNATS(natsURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = busA.Close() }()
+	busB, err := events.NewNATS(natsURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = busB.Close() }()
+
+	received, unsubscribe := busA.Subscribe(runID)
+	defer unsubscribe()
+	local, unsubscribeLocal := busB.Subscribe(runID)
+	defer unsubscribeLocal()
+	wantTypes := []string{"run.queued", "run.started", "run.succeeded"}
+	for _, eventType := range wantTypes {
+		busB.Publish(domain.RunEvent{
+			RunID: runID, Type: eventType, Message: eventType, Timestamp: time.Now().UTC(),
+		})
+	}
+	for _, wantType := range wantTypes {
+		assertDistributedEvent(t, received, runID, wantType)
+		assertDistributedEvent(t, local, runID, wantType)
+	}
+	select {
+	case duplicate := <-received:
+		t.Fatalf("replica A received duplicate event: %+v", duplicate)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	replay, unsubscribeReplay := busA.Subscribe(runID)
+	defer unsubscribeReplay()
+	for _, wantType := range wantTypes {
+		assertDistributedEvent(t, replay, runID, wantType)
+	}
+
+	slowRunID := runID + "_slow"
+	_, unsubscribeSlow := busA.Subscribe(slowRunID)
+	defer unsubscribeSlow()
+	started := time.Now()
+	for i := 0; i < 64; i++ {
+		busB.Publish(domain.RunEvent{
+			RunID: slowRunID, Type: "run.progress", Message: fmt.Sprintf("event %d", i), Timestamp: time.Now().UTC(),
+		})
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("slow subscriber blocked distributed publisher for %s", elapsed)
+	}
+}
+
+func assertDistributedEvent(t *testing.T, channel <-chan domain.RunEvent, runID, eventType string) {
+	t.Helper()
+	select {
+	case event := <-channel:
+		if event.RunID != runID || event.Type != eventType {
+			t.Fatalf("unexpected distributed event: got=%+v want_run=%s want_type=%s", event, runID, eventType)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for distributed event %s", eventType)
+	}
 }
 
 func testRedisLeaseRenewal(t *testing.T, ctx context.Context, coordinator coordination.Coordinator, key string) {
