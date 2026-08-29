@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/thiagomontozo/agentmesh/internal/agenthealth"
 	"github.com/thiagomontozo/agentmesh/internal/domain"
 	"github.com/thiagomontozo/agentmesh/internal/engine"
 	"github.com/thiagomontozo/agentmesh/internal/events"
@@ -21,11 +22,12 @@ import (
 )
 
 type Server struct {
-	store      store.Repository
-	engine     *engine.Engine
-	events     events.Broker
-	mux        *http.ServeMux
-	instanceID string
+	store       store.Repository
+	engine      *engine.Engine
+	events      events.Broker
+	mux         *http.ServeMux
+	instanceID  string
+	agentHealth agenthealth.Registry
 }
 
 func New(s store.Repository, e *engine.Engine, bus events.Broker) *Server {
@@ -33,9 +35,18 @@ func New(s store.Repository, e *engine.Engine, bus events.Broker) *Server {
 }
 
 func NewWithInstanceID(s store.Repository, e *engine.Engine, bus events.Broker, instanceID string) *Server {
-	server := &Server{store: s, engine: e, events: bus, mux: http.NewServeMux(), instanceID: instanceID}
+	server := &Server{
+		store: s, engine: e, events: bus, mux: http.NewServeMux(), instanceID: instanceID,
+		agentHealth: agenthealth.Noop{},
+	}
 	server.routes()
 	return server
+}
+
+func (s *Server) SetAgentHealth(registry agenthealth.Registry) {
+	if registry != nil {
+		s.agentHealth = registry
+	}
 }
 
 func (s *Server) Handler() http.Handler {
@@ -48,6 +59,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/agents", s.listAgents)
 	s.mux.HandleFunc("POST /api/v1/agents", s.createAgent)
 	s.mux.HandleFunc("GET /api/v1/agents/{id}", s.getAgent)
+	s.mux.HandleFunc("GET /api/v1/agents/{id}/health", s.getAgentHealth)
 	s.mux.HandleFunc("GET /api/v1/runs", s.listRuns)
 	s.mux.HandleFunc("POST /api/v1/runs", s.createRun)
 	s.mux.HandleFunc("GET /api/v1/runs/{id}", s.getRun)
@@ -107,9 +119,25 @@ func (s *Server) createAgent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not create agent")
 		return
 	}
+	s.agentHealth.Refresh(agent)
 	attributes := append(observability.ContextAttrs(r.Context()), "agent_id", agent.ID, "runtime", agent.Runtime)
 	slog.InfoContext(r.Context(), "agent created", attributes...)
 	writeJSON(w, http.StatusCreated, agent)
+}
+
+func (s *Server) getAgentHealth(w http.ResponseWriter, r *http.Request) {
+	agent, err := s.store.GetAgent(r.Context(), r.PathValue("id"))
+	if errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "agent not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load agent")
+		return
+	}
+	state := s.agentHealth.State(agent.ID)
+	s.agentHealth.Refresh(agent)
+	writeJSON(w, http.StatusOK, state)
 }
 
 func (s *Server) listAgents(w http.ResponseWriter, r *http.Request) {

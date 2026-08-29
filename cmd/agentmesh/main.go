@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/thiagomontozo/agentmesh/internal/agenthealth"
 	"github.com/thiagomontozo/agentmesh/internal/cache"
 	"github.com/thiagomontozo/agentmesh/internal/config"
 	"github.com/thiagomontozo/agentmesh/internal/coordination"
@@ -108,8 +109,19 @@ func main() {
 		os.Exit(1)
 	}
 	runEngine.Start(rootCtx)
+	healthService, err := agenthealth.New(repository, nil, agenthealth.Config{
+		Path: cfg.AgentHealthPath, Interval: cfg.AgentHealthInterval,
+		Timeout: cfg.AgentHealthTimeout, Workers: cfg.AgentHealthWorkers,
+	})
+	if err != nil {
+		logger.Error("agent health initialization failed", "error", err)
+		os.Exit(1)
+	}
+	healthService.Start(rootCtx)
+	defer healthService.Stop()
 
 	api := httpapi.NewWithInstanceID(repository, runEngine, eventBus, instanceID)
+	api.SetAgentHealth(healthService)
 	server := &http.Server{
 		Addr:              cfg.Addr,
 		Handler:           api.Handler(),

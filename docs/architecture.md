@@ -96,3 +96,11 @@ The application emits JSON through `log/slog`. HTTP middleware accepts a safe `X
 Every process has an `instance_id`: `AGENTMESH_INSTANCE_ID` when configured, otherwise hostname plus a random suffix. Memory workers use stable IDs such as `memory-1`; JetStream deliveries acquire bounded worker slots such as `nats-1`. Engine lifecycle, retry, timeout, panic, lease, success, and failure logs add the identifiers available at their boundary: `request_id`, `instance_id`, `worker_id`, `run_id`, `agent_id`, and `attempt`.
 
 Terminal Runs expose persisted `duration_ms`, measured from execution start or, when execution never started, creation time. Recovery clears the partial duration before requeue. This increment intentionally does not add metrics, tracing, or OpenTelemetry; logs and persisted lifecycle fields are the operational baseline for evaluating those later.
+
+## Agent health
+
+`internal/agenthealth.Service` keeps operational availability separate from persisted Agent configuration. Only Agents declaring `runtime: "remote"`, `protocol: "http"`, and an endpoint are probed. Their base endpoint is joined with the configured `/healthz` convention, redirects are rejected, and only `2xx` is healthy. Controlled reasons distinguish timeout, cancellation, unreachable endpoint, invalid endpoint, and HTTP status without exposing raw transport errors through the API.
+
+One scheduler and a fixed worker pool perform checks; there is no goroutine per Agent. The queue is bounded and refresh submission is non-blocking, so slow or numerous Agents cannot block normal API handlers. `GET /api/v1/agents/{id}/health` returns the current state immediately and requests a refresh.
+
+Health is derived and process-local. A restarted or different replica initially reports `unknown` until its own probe completes. It is not persisted, does not modify Agent configuration, does not remove unhealthy Agents, and is not consulted by runtime resolution or routing.

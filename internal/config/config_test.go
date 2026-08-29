@@ -24,6 +24,10 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.EventRetention != 7*24*time.Hour || cfg.EventHistoryLimit != 1000 {
 		t.Fatalf("unexpected event history defaults: %+v", cfg)
 	}
+	if cfg.AgentHealthPath != "/healthz" || cfg.AgentHealthInterval != 30*time.Second ||
+		cfg.AgentHealthTimeout != 2*time.Second || cfg.AgentHealthWorkers != 2 {
+		t.Fatalf("unexpected agent health defaults: %+v", cfg)
+	}
 }
 
 func TestLoadRejectsInvalidValues(t *testing.T) {
@@ -49,6 +53,10 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 		{name: "event retention is zero", key: "AGENTMESH_EVENT_RETENTION", value: "0s"},
 		{name: "event history limit is zero", key: "AGENTMESH_EVENT_HISTORY_LIMIT", value: "0"},
 		{name: "instance ID is too long", key: "AGENTMESH_INSTANCE_ID", value: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+		{name: "agent health path is relative", key: "AGENTMESH_AGENT_HEALTH_PATH", value: "healthz"},
+		{name: "agent health interval is zero", key: "AGENTMESH_AGENT_HEALTH_INTERVAL", value: "0s"},
+		{name: "agent health timeout is zero", key: "AGENTMESH_AGENT_HEALTH_TIMEOUT", value: "0s"},
+		{name: "agent health workers is zero", key: "AGENTMESH_AGENT_HEALTH_WORKERS", value: "0"},
 	}
 
 	for _, test := range tests {
@@ -116,6 +124,10 @@ func clearEnvironment(t *testing.T) {
 		"AGENTMESH_EVENT_RETENTION",
 		"AGENTMESH_EVENT_HISTORY_LIMIT",
 		"AGENTMESH_INSTANCE_ID",
+		"AGENTMESH_AGENT_HEALTH_PATH",
+		"AGENTMESH_AGENT_HEALTH_INTERVAL",
+		"AGENTMESH_AGENT_HEALTH_TIMEOUT",
+		"AGENTMESH_AGENT_HEALTH_WORKERS",
 	} {
 		t.Setenv(key, "")
 	}

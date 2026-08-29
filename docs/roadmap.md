@@ -42,6 +42,7 @@
 - [ ] OpenTelemetry traces and metrics
 - [ ] Prometheus metrics
 - [x] Structured JSON logs, request correlation, instance/worker IDs, and Run duration
+- [x] Bounded background health checks for remote HTTP Agents
 - [ ] Authentication
 - [ ] RBAC
 - [ ] Audit log

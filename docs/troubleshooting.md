@@ -4,6 +4,10 @@
 
 Capture the `X-Request-ID` response header or provide your own safe value. JSON logs preserve it as `request_id` on Run processing records and combine it with `instance_id`, `worker_id`, `run_id`, `agent_id`, and `attempt` when available. In production, configure a stable unique `AGENTMESH_INSTANCE_ID` on each replica; generated IDs change after restart.
 
+## Agent health is unknown after restart
+
+This is expected because operational Agent health is derived per replica and is not persisted. The background workers will probe remote HTTP Agents shortly after startup. Calling `GET /api/v1/agents/{id}/health` also schedules a non-blocking refresh. Confirm the Agent exposes the configured `AGENTMESH_AGENT_HEALTH_PATH` and returns a `2xx` response.
+
 ## `unlinkat ... httpapi.test.exe` on Windows
 
 If all package tests report `ok` and the error occurs only while Go removes a temporary `.test.exe`, first treat it as Windows file locking rather than an AgentMesh failure. Antivirus scanning and indexing can briefly retain newly created executables.
