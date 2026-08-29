@@ -176,6 +176,27 @@ func TestMemoryListsAgentsByCanonicalCapability(t *testing.T) {
 	}
 }
 
+func TestMemoryFindAgentsCombinesDeclaredFilters(t *testing.T) {
+	memory := NewMemory()
+	ctx := context.Background()
+	for _, agent := range []domain.Agent{
+		{ID: "agt_http", Name: "HTTP", Runtime: "remote", Protocol: "http", Endpoint: "http://agent", Capabilities: []string{"testing"}},
+		{ID: "agt_demo", Name: "Demo", Capabilities: []string{"testing"}},
+		{ID: "agt_other", Name: "Other", Runtime: "remote", Protocol: "http", Endpoint: "http://other", Capabilities: []string{"debugging"}},
+	} {
+		if _, err := memory.CreateAgent(ctx, agent); err != nil {
+			t.Fatal(err)
+		}
+	}
+	agents, err := memory.FindAgents(ctx, AgentFilter{Capability: "TESTING", Runtime: "REMOTE", Protocol: "HTTP"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(agents) != 1 || agents[0].ID != "agt_http" {
+		t.Fatalf("unexpected combined filter result: %+v", agents)
+	}
+}
+
 func TestMemoryRunLifecycle(t *testing.T) {
 	ctx := context.Background()
 	memory := NewMemory()

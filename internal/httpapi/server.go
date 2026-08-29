@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/thiagomontozo/agentmesh/internal/agenthealth"
+	"github.com/thiagomontozo/agentmesh/internal/discovery"
 	"github.com/thiagomontozo/agentmesh/internal/domain"
 	"github.com/thiagomontozo/agentmesh/internal/engine"
 	"github.com/thiagomontozo/agentmesh/internal/events"
@@ -29,6 +30,7 @@ type Server struct {
 	mux         *http.ServeMux
 	instanceID  string
 	agentHealth agenthealth.Registry
+	discovery   *discovery.Service
 }
 
 func New(s store.Repository, e *engine.Engine, bus events.Broker) *Server {
@@ -40,6 +42,7 @@ func NewWithInstanceID(s store.Repository, e *engine.Engine, bus events.Broker, 
 		store: s, engine: e, events: bus, mux: http.NewServeMux(), instanceID: instanceID,
 		agentHealth: agenthealth.Noop{},
 	}
+	server.discovery = discovery.New(s, server.agentHealth)
 	server.routes()
 	return server
 }
@@ -47,6 +50,7 @@ func NewWithInstanceID(s store.Repository, e *engine.Engine, bus events.Broker, 
 func (s *Server) SetAgentHealth(registry agenthealth.Registry) {
 	if registry != nil {
 		s.agentHealth = registry
+		s.discovery = discovery.New(s.store, registry)
 	}
 }
 
@@ -146,23 +150,57 @@ func (s *Server) getAgentHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listAgents(w http.ResponseWriter, r *http.Request) {
-	capability := strings.TrimSpace(r.URL.Query().Get("capability"))
-	var agents []domain.Agent
-	var err error
-	if capability == "" {
-		agents, err = s.store.ListAgents(r.Context())
-	} else {
-		if _, validationErr := domain.NormalizeCapability(capability); validationErr != nil {
-			writeError(w, http.StatusBadRequest, validationErr.Error())
-			return
-		}
-		agents, err = s.store.ListAgentsByCapability(r.Context(), capability)
-	}
+	query, err := agentDiscoveryQuery(r)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not list agents")
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": agents})
+	result, err := s.discovery.Search(r.Context(), query)
+	if errors.Is(err, discovery.ErrInvalidQuery) {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not discover agents")
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func agentDiscoveryQuery(r *http.Request) (discovery.Query, error) {
+	values := r.URL.Query()
+	health := strings.ToLower(strings.TrimSpace(values.Get("health")))
+	status := strings.ToLower(strings.TrimSpace(values.Get("status")))
+	if health != "" && status != "" && health != status {
+		return discovery.Query{}, fmt.Errorf("health and status filters conflict")
+	}
+	if health == "" {
+		health = status
+	}
+	limit, err := queryNonNegativeInt(values.Get("limit"), "limit")
+	if err != nil {
+		return discovery.Query{}, err
+	}
+	offset, err := queryNonNegativeInt(values.Get("offset"), "offset")
+	if err != nil {
+		return discovery.Query{}, err
+	}
+	return discovery.Query{
+		Capability: values.Get("capability"), Runtime: values.Get("runtime"), Protocol: values.Get("protocol"),
+		Health: agenthealth.Status(health), Limit: limit, Offset: offset,
+	}, nil
+}
+
+func queryNonNegativeInt(value, name string) (int, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, nil
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed < 0 {
+		return 0, fmt.Errorf("%s must be a non-negative integer", name)
+	}
+	return parsed, nil
 }
 
 func (s *Server) getAgent(w http.ResponseWriter, r *http.Request) {

@@ -76,10 +76,13 @@ List or fetch agents:
 ```bash
 curl http://localhost:8080/api/v1/agents
 curl 'http://localhost:8080/api/v1/agents?capability=legal-analysis'
+curl 'http://localhost:8080/api/v1/agents?capability=legal-analysis&runtime=remote&protocol=http&health=healthy&limit=20&offset=0'
 curl http://localhost:8080/api/v1/agents/agt_REPLACE_ME
 ```
 
-The optional `capability` filter performs an exact lookup on the normalized key. PostgreSQL backs this query with a GIN index. It does not perform semantic matching or select an Agent for a Run.
+Discovery accepts exact `capability`, `runtime`, and `protocol` filters, plus derived `health` (`unknown`, `healthy`, or `unhealthy`). `status` is accepted as an alias for `health`; conflicting values are rejected. `limit` may be `0` for the backward-compatible unbounded listing or between `1` and `200`; `offset` is zero-based. Responses add deterministic `total`, `limit`, and `offset` metadata and are ordered by creation time then Agent ID.
+
+PostgreSQL backs capability lookup with a GIN index and runtime/protocol lookup with partial B-tree indexes. Health is filtered against the current replica's derived state after persisted filters are applied. Discovery performs exact matching only: it does not interpret input text, rank candidates, or select an Agent for a Run.
 
 Read the derived operational status of an Agent:
 

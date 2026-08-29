@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -122,7 +123,7 @@ func (r *Repository) GetAgent(ctx context.Context, id string) (domain.Agent, err
 }
 
 func (r *Repository) ListAgents(ctx context.Context) ([]domain.Agent, error) {
-	return r.listAgents(ctx, agentSelect+" ORDER BY created_at, id")
+	return r.FindAgents(ctx, store.AgentFilter{})
 }
 
 func (r *Repository) ListAgentsByCapability(ctx context.Context, capability string) ([]domain.Agent, error) {
@@ -130,7 +131,47 @@ func (r *Repository) ListAgentsByCapability(ctx context.Context, capability stri
 	if err != nil {
 		return nil, err
 	}
-	return r.listAgents(ctx, agentSelect+" WHERE capabilities @> ARRAY[$1]::text[] ORDER BY created_at, id", capability)
+	return r.FindAgents(ctx, store.AgentFilter{Capability: capability})
+}
+
+func (r *Repository) FindAgents(ctx context.Context, filter store.AgentFilter) ([]domain.Agent, error) {
+	var err error
+	if filter.Capability != "" {
+		filter.Capability, err = domain.NormalizeCapability(filter.Capability)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if filter.Runtime, err = domain.NormalizeAgentIdentifier("runtime", filter.Runtime); err != nil {
+		return nil, err
+	}
+	if filter.Protocol, err = domain.NormalizeAgentIdentifier("protocol", filter.Protocol); err != nil {
+		return nil, err
+	}
+	conditions := make([]string, 0, 3)
+	args := make([]any, 0, 3)
+	add := func(column string, value any, array bool) {
+		args = append(args, value)
+		if array {
+			conditions = append(conditions, fmt.Sprintf("%s @> ARRAY[$%d]::text[]", column, len(args)))
+		} else {
+			conditions = append(conditions, fmt.Sprintf("%s = $%d", column, len(args)))
+		}
+	}
+	if filter.Capability != "" {
+		add("capabilities", filter.Capability, true)
+	}
+	if filter.Runtime != "" {
+		add("runtime", filter.Runtime, false)
+	}
+	if filter.Protocol != "" {
+		add("protocol", filter.Protocol, false)
+	}
+	query := agentSelect
+	if len(conditions) > 0 {
+		query += " WHERE " + strings.Join(conditions, " AND ")
+	}
+	return r.listAgents(ctx, query+" ORDER BY created_at, id", args...)
 }
 
 func (r *Repository) listAgents(ctx context.Context, query string, args ...any) ([]domain.Agent, error) {
