@@ -78,6 +78,7 @@ The Engine resolves the already-selected Agent's runtime through a concurrency-s
 - Bounded PostgreSQL event history with stable SSE event IDs and restart replay
 - JSON operational logs correlated by request, instance, worker, Run, Agent, and attempt
 - Persisted request correlation and explicit Run duration
+- Derived `unknown`/`healthy`/`unhealthy` status for remote HTTP Agents
 - Restart recovery for queued/running work
 
 ## API
@@ -89,6 +90,7 @@ The Engine resolves the already-selected Agent's runtime through a concurrency-s
 | `POST` | `/api/v1/agents` | Create an agent |
 | `GET` | `/api/v1/agents` | List agents |
 | `GET` | `/api/v1/agents/{id}` | Get an agent |
+| `GET` | `/api/v1/agents/{id}/health` | Get derived Agent health and schedule refresh |
 | `POST` | `/api/v1/runs` | Submit a run |
 | `GET` | `/api/v1/runs` | List runs |
 | `GET` | `/api/v1/runs/{id}` | Get run status/result |
@@ -159,6 +161,10 @@ With the server running in one terminal:
 | `AGENTMESH_LEASE_TTL` | `5m` | Distributed per-run execution lease |
 | `AGENTMESH_EVENT_RETENTION` | `168h` | Maximum age of persisted Run events |
 | `AGENTMESH_EVENT_HISTORY_LIMIT` | `1000` | Maximum persisted/replayed events per Run |
+| `AGENTMESH_AGENT_HEALTH_PATH` | `/healthz` | Health path appended to remote Agent endpoints |
+| `AGENTMESH_AGENT_HEALTH_INTERVAL` | `30s` | Background health scan interval |
+| `AGENTMESH_AGENT_HEALTH_TIMEOUT` | `2s` | Per-probe timeout |
+| `AGENTMESH_AGENT_HEALTH_WORKERS` | `2` | Fixed probe worker count |
 
 ## Test
 

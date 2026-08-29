@@ -50,6 +50,14 @@ curl http://localhost:8080/api/v1/agents
 curl http://localhost:8080/api/v1/agents/agt_REPLACE_ME
 ```
 
+Read the derived operational status of an Agent:
+
+```bash
+curl http://localhost:8080/api/v1/agents/agt_REPLACE_ME/health
+```
+
+The response contains `unknown`, `healthy`, or `unhealthy`, plus `last_checked_at` and a controlled failure `reason` when available. Reading the endpoint is non-blocking: it returns the cached state and schedules a refresh. Legacy/demo and non-HTTP Agents remain `unknown`. Health is deliberately separate from the persisted Agent definition and is not used for routing yet.
+
 ## Runs
 
 Submit an asynchronous run:

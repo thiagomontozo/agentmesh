@@ -44,6 +44,10 @@ The API is available at `http://localhost:8080`. PostgreSQL migrations run autom
 | `AGENTMESH_LEASE_TTL` | `5m` | Per-run execution lease; renewed every third of the TTL and must be positive |
 | `AGENTMESH_EVENT_RETENTION` | `168h` | Maximum age of persisted Run events; must be positive |
 | `AGENTMESH_EVENT_HISTORY_LIMIT` | `1000` | Maximum persisted/replayed events per Run; must be at least 1 |
+| `AGENTMESH_AGENT_HEALTH_PATH` | `/healthz` | Relative health path appended to a remote HTTP Agent base endpoint |
+| `AGENTMESH_AGENT_HEALTH_INTERVAL` | `30s` | Background scan interval; must be positive |
+| `AGENTMESH_AGENT_HEALTH_TIMEOUT` | `2s` | Timeout for one Agent probe; must be positive |
+| `AGENTMESH_AGENT_HEALTH_WORKERS` | `2` | Fixed number of probe workers; must be at least 1 |
 | `AGENTMESH_DATABASE_URL` | none | Required in distributed mode |
 | `AGENTMESH_NATS_URL` | none | Required in distributed mode |
 | `AGENTMESH_REDIS_URL` | none | Required in distributed mode |
@@ -102,3 +106,4 @@ Runs interrupted by process shutdown remain recoverable. On startup, queued work
 - Distributed SSE uses NATS pub/sub across replicas. Keep NATS available; publish failures are logged and only the publisher's local subscribers see the affected event.
 - Run event history is persisted in PostgreSQL and bounded by both age and count. SSE reconnects replay that bounded history; clients should still query the Run resource for authoritative final state.
 - `Last-Event-ID` filtering is not consumed yet. Clients may receive already processed events after reconnecting and should deduplicate by `event_id`.
+- Agent health is an in-memory, per-replica observation. Expect `unknown` after restart and do not treat it as a persisted configuration field or routing decision.

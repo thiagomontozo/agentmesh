@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/thiagomontozo/agentmesh/internal/agenthealth"
 	"github.com/thiagomontozo/agentmesh/internal/coordination"
 	"github.com/thiagomontozo/agentmesh/internal/domain"
 	"github.com/thiagomontozo/agentmesh/internal/engine"
@@ -226,6 +227,62 @@ func TestCreateAgentWithExecutionMetadataAndList(t *testing.T) {
 	if !strings.Contains(completed.Error, agentruntime.ErrUnknownRuntime.Error()) {
 		t.Fatalf("configured unknown runtime did not fail explicitly: %+v", completed)
 	}
+}
+
+func TestAgentHealthEndpointReportsDerivedState(t *testing.T) {
+	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/healthz" {
+			t.Errorf("unexpected health path %q", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer remote.Close()
+	server, _ := newTestServer(t)
+	health, err := agenthealth.New(server.store, nil, agenthealth.Config{
+		Path: "/healthz", Interval: time.Hour, Timeout: 100 * time.Millisecond, Workers: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	health.Start(ctx)
+	defer func() {
+		cancel()
+		health.Stop()
+	}()
+	server.SetAgentHealth(health)
+
+	create := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(`{
+		"name":"remote","runtime":"remote","protocol":"http","endpoint":"`+remote.URL+`"
+	}`))
+	createResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(createResponse, create)
+	if createResponse.Code != http.StatusCreated || strings.Contains(createResponse.Body.String(), `"health"`) {
+		t.Fatalf("health must remain separate from Agent configuration: %d %s", createResponse.Code, createResponse.Body.String())
+	}
+	var agent domain.Agent
+	if err := json.Unmarshal(createResponse.Body.Bytes(), &agent); err != nil {
+		t.Fatal(err)
+	}
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		request := httptest.NewRequest(http.MethodGet, "/api/v1/agents/"+agent.ID+"/health", nil)
+		response := httptest.NewRecorder()
+		server.Handler().ServeHTTP(response, request)
+		if response.Code != http.StatusOK {
+			t.Fatalf("unexpected health status %d: %s", response.Code, response.Body.String())
+		}
+		var state agenthealth.State
+		if err := json.Unmarshal(response.Body.Bytes(), &state); err != nil {
+			t.Fatal(err)
+		}
+		if state.Status == agenthealth.StatusHealthy && state.LastCheckedAt != nil {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("timed out waiting for derived Agent health")
 }
 
 func TestCreateAgentRejectsInvalidExecutionMetadata(t *testing.T) {
