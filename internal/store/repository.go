@@ -11,6 +11,8 @@ import (
 var ErrRunCanceled = errors.New("run was canceled")
 var ErrStaleExecution = errors.New("stale run execution fence")
 var ErrRunNotExecutable = errors.New("run is not executable")
+var ErrConflict = errors.New("concurrent update conflict")
+var ErrAgentInUse = errors.New("agent has dependent runs")
 
 type PendingRun struct {
 	ID     string
@@ -21,6 +23,8 @@ type AgentRepository interface {
 	CreateAgent(ctx context.Context, agent domain.Agent) (domain.Agent, error)
 	GetAgent(ctx context.Context, id string) (domain.Agent, error)
 	ListAgents(ctx context.Context) ([]domain.Agent, error)
+	UpdateAgent(ctx context.Context, agent domain.Agent, expectedVersion int64) (domain.Agent, error)
+	DeleteAgent(ctx context.Context, id string, expectedVersion int64) error
 }
 
 type RunRepository interface {

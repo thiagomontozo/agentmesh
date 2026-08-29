@@ -229,6 +229,92 @@ func TestCreateAgentWithExecutionMetadataAndList(t *testing.T) {
 	}
 }
 
+func TestAgentUpdateDeleteAndConcurrencyAPI(t *testing.T) {
+	server, _ := newTestServer(t)
+	health := &recordingAgentHealth{}
+	server.SetAgentHealth(health)
+	createRequest := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(`{"name":"original"}`))
+	createResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(createResponse, createRequest)
+	if createResponse.Code != http.StatusCreated || createResponse.Header().Get("ETag") != `"1"` {
+		t.Fatalf("unexpected create response: %d etag=%s body=%s", createResponse.Code, createResponse.Header().Get("ETag"), createResponse.Body.String())
+	}
+	var created domain.Agent
+	if err := json.Unmarshal(createResponse.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	updateBody := `{
+		"name":"updated","system_prompt":"new prompt","runtime":"remote","protocol":"http",
+		"endpoint":"http://agent:9000","capabilities":["testing","debugging"]
+	}`
+	updateRequest := httptest.NewRequest(http.MethodPut, "/api/v1/agents/"+created.ID, strings.NewReader(updateBody))
+	updateRequest.Header.Set("If-Match", `"1"`)
+	updateResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(updateResponse, updateRequest)
+	if updateResponse.Code != http.StatusOK || updateResponse.Header().Get("ETag") != `"2"` {
+		t.Fatalf("unexpected update response: %d etag=%s body=%s", updateResponse.Code, updateResponse.Header().Get("ETag"), updateResponse.Body.String())
+	}
+	var updated domain.Agent
+	if err := json.Unmarshal(updateResponse.Body.Bytes(), &updated); err != nil {
+		t.Fatal(err)
+	}
+	if updated.Version != 2 || updated.Name != "updated" || !updated.CreatedAt.Equal(created.CreatedAt) ||
+		len(updated.Capabilities) != 2 || updated.UpdatedAt.Before(created.UpdatedAt) {
+		t.Fatalf("unexpected updated Agent: %+v", updated)
+	}
+
+	staleRequest := httptest.NewRequest(http.MethodPut, "/api/v1/agents/"+created.ID, strings.NewReader(updateBody))
+	staleRequest.Header.Set("If-Match", `"1"`)
+	staleResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(staleResponse, staleRequest)
+	if staleResponse.Code != http.StatusConflict {
+		t.Fatalf("expected stale update conflict, got %d: %s", staleResponse.Code, staleResponse.Body.String())
+	}
+
+	if _, _, err := server.store.CreateRun(context.Background(), domain.Run{
+		ID: "run_history", AgentID: created.ID, Status: domain.RunSucceeded, MaxAttempts: 1,
+	}, ""); err != nil {
+		t.Fatal(err)
+	}
+	deleteUsed := httptest.NewRequest(http.MethodDelete, "/api/v1/agents/"+created.ID, nil)
+	deleteUsed.Header.Set("If-Match", `"2"`)
+	deleteUsedResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(deleteUsedResponse, deleteUsed)
+	if deleteUsedResponse.Code != http.StatusConflict || !strings.Contains(deleteUsedResponse.Body.String(), "dependent runs") {
+		t.Fatalf("dependent Run history was not protected: %d %s", deleteUsedResponse.Code, deleteUsedResponse.Body.String())
+	}
+
+	unused, err := server.store.CreateAgent(context.Background(), domain.Agent{ID: "agt_unused", Name: "unused"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deleteUnused := httptest.NewRequest(http.MethodDelete, "/api/v1/agents/"+unused.ID, nil)
+	deleteUnused.Header.Set("If-Match", `"1"`)
+	deleteUnusedResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(deleteUnusedResponse, deleteUnused)
+	if deleteUnusedResponse.Code != http.StatusNoContent {
+		t.Fatalf("expected unused Agent deletion, got %d: %s", deleteUnusedResponse.Code, deleteUnusedResponse.Body.String())
+	}
+	if health.forgottenAgent() != unused.ID || health.refreshCount() < 2 {
+		t.Fatalf("health registry was not synchronized: refreshed=%d forgotten=%q", health.refreshCount(), health.forgottenAgent())
+	}
+}
+
+func TestAgentMutationRejectsMalformedIfMatch(t *testing.T) {
+	server, _ := newTestServer(t)
+	agent, err := server.store.CreateAgent(context.Background(), domain.Agent{ID: "agt_1", Name: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodDelete, "/api/v1/agents/"+agent.ID, nil)
+	request.Header.Set("If-Match", "1")
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("expected malformed If-Match rejection, got %d: %s", response.Code, response.Body.String())
+	}
+}
+
 func TestAgentHealthEndpointReportsDerivedState(t *testing.T) {
 	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/healthz" {
@@ -523,6 +609,40 @@ func waitForRunStatus(t *testing.T, repository store.Repository, runID string, w
 type synchronizedBuffer struct {
 	mu     sync.Mutex
 	buffer bytes.Buffer
+}
+
+type recordingAgentHealth struct {
+	mu        sync.Mutex
+	refreshed []domain.Agent
+	forgotten string
+}
+
+func (r *recordingAgentHealth) State(agentID string) agenthealth.State {
+	return agenthealth.State{AgentID: agentID, Status: agenthealth.StatusUnknown}
+}
+
+func (r *recordingAgentHealth) Refresh(agent domain.Agent) {
+	r.mu.Lock()
+	r.refreshed = append(r.refreshed, agent)
+	r.mu.Unlock()
+}
+
+func (r *recordingAgentHealth) Forget(agentID string) {
+	r.mu.Lock()
+	r.forgotten = agentID
+	r.mu.Unlock()
+}
+
+func (r *recordingAgentHealth) refreshCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.refreshed)
+}
+
+func (r *recordingAgentHealth) forgottenAgent() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.forgotten
 }
 
 func (b *synchronizedBuffer) Write(payload []byte) (int, error) {

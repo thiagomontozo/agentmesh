@@ -71,10 +71,11 @@ func TestCachedRepositoryReadsCachedAgent(t *testing.T) {
 		ID: "agt_1", Name: "cached", Runtime: "remote", Protocol: "http",
 		Endpoint: "http://agent:9000", Capabilities: []string{"testing"},
 	}
-	if _, err := repository.CreateAgent(ctx, original); err != nil {
+	created, err := repository.CreateAgent(ctx, original)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := inner.CreateAgent(ctx, domain.Agent{ID: "agt_1", Name: "database"}); err != nil {
+	if _, err := inner.UpdateAgent(ctx, domain.Agent{ID: "agt_1", Name: "database"}, created.Version); err != nil {
 		t.Fatal(err)
 	}
 	loaded, err := repository.GetAgent(ctx, "agt_1")
@@ -86,6 +87,33 @@ func TestCachedRepositoryReadsCachedAgent(t *testing.T) {
 	}
 	if len(loaded.Capabilities) != 1 || loaded.Capabilities[0] != "testing" {
 		t.Fatalf("unexpected cached capabilities: %#v", loaded.Capabilities)
+	}
+}
+
+func TestCachedRepositoryUpdatesAndDeletesAgentCache(t *testing.T) {
+	ctx := context.Background()
+	inner := NewMemory()
+	repository := NewCached(inner, newFakeCache(), time.Minute)
+	created, err := repository.CreateAgent(ctx, domain.Agent{ID: "agt_1", Name: "original"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated, err := repository.UpdateAgent(ctx, domain.Agent{ID: created.ID, Name: "updated"}, created.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := repository.GetAgent(ctx, created.ID)
+	if err != nil || loaded.Name != "updated" || loaded.Version != updated.Version {
+		t.Fatalf("updated Agent was not cached: agent=%+v err=%v", loaded, err)
+	}
+	if _, err := repository.UpdateAgent(ctx, domain.Agent{ID: created.ID, Name: "stale"}, created.Version); !errors.Is(err, ErrConflict) {
+		t.Fatalf("expected stale cache update conflict, got %v", err)
+	}
+	if err := repository.DeleteAgent(ctx, created.ID, updated.Version); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.GetAgent(ctx, created.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("deleted Agent remained cached: %v", err)
 	}
 }
 

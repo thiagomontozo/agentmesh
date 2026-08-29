@@ -16,6 +16,32 @@ type Agent struct {
 	Endpoint     string    `json:"endpoint,omitempty"`
 	Capabilities []string  `json:"capabilities,omitempty"`
 	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+	Version      int64     `json:"version"`
+}
+
+func (a *Agent) InitializeForCreate(now time.Time) error {
+	if err := a.NormalizeAndValidate(); err != nil {
+		return err
+	}
+	now = now.UTC()
+	if a.CreatedAt.IsZero() {
+		a.CreatedAt = now
+	} else {
+		a.CreatedAt = a.CreatedAt.UTC()
+	}
+	if a.UpdatedAt.IsZero() {
+		a.UpdatedAt = a.CreatedAt
+	} else {
+		a.UpdatedAt = a.UpdatedAt.UTC()
+	}
+	if a.Version == 0 {
+		a.Version = 1
+	}
+	if a.Version != 1 {
+		return fmt.Errorf("new agent version must be 1")
+	}
+	return nil
 }
 
 func (a *Agent) NormalizeAndValidate() error {

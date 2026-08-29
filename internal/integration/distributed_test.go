@@ -81,6 +81,20 @@ func TestDistributedRunLifecycleAndIdempotency(t *testing.T) {
 		loadedAgent.Endpoint != configuredAgent.Endpoint || !slices.Equal(loadedAgent.Capabilities, configuredAgent.Capabilities) {
 		t.Fatalf("agent execution metadata was not persisted: got=%+v want=%+v", loadedAgent, configuredAgent)
 	}
+	configuredAgent.Name = "configured-updated"
+	configuredAgent.Endpoint = "http://agent:9001"
+	configuredAgent.Capabilities = []string{"testing", "observability"}
+	updatedAgent, err := repository.UpdateAgent(ctx, configuredAgent, loadedAgent.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updatedAgent.Version != loadedAgent.Version+1 || !updatedAgent.CreatedAt.Equal(loadedAgent.CreatedAt) ||
+		updatedAgent.Endpoint != configuredAgent.Endpoint || !slices.Equal(updatedAgent.Capabilities, configuredAgent.Capabilities) {
+		t.Fatalf("PostgreSQL Agent update was not persisted: %+v", updatedAgent)
+	}
+	if _, err := repository.UpdateAgent(ctx, configuredAgent, loadedAgent.Version); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("expected stale PostgreSQL Agent update conflict, got %v", err)
+	}
 	agents, err := repository.ListAgents(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -95,6 +109,16 @@ func TestDistributedRunLifecycleAndIdempotency(t *testing.T) {
 	if !foundConfigured {
 		t.Fatalf("configured agent was not listed with its capabilities: %+v", agents)
 	}
+	disposable, err := repository.CreateAgent(ctx, domain.Agent{ID: "agt_disposable_" + suffix, Name: "disposable"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.DeleteAgent(ctx, disposable.ID, disposable.Version); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.GetAgent(ctx, disposable.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("deleted PostgreSQL Agent is still readable: %v", err)
+	}
 	run := domain.Run{
 		ID: "run_" + suffix, AgentID: agent.ID, Input: "hello", Status: domain.RunQueued,
 		MaxAttempts: 3, RequestID: "req_" + suffix, CreatedAt: time.Now().UTC(),
@@ -107,6 +131,13 @@ func TestDistributedRunLifecycleAndIdempotency(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitForStatus(t, ctx, repository, created.ID, domain.RunSucceeded)
+	usedAgent, err := repository.GetAgent(ctx, agent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.DeleteAgent(ctx, usedAgent.ID, usedAgent.Version); !errors.Is(err, store.ErrAgentInUse) {
+		t.Fatalf("PostgreSQL allowed deleting Agent with Run history: %v", err)
+	}
 	completedRun, err := repository.GetRun(ctx, created.ID)
 	if err != nil || completedRun.RequestID != run.RequestID || completedRun.CompletedAt == nil || completedRun.DurationMS < 0 {
 		t.Fatalf("PostgreSQL Run observability fields were not persisted: run=%+v err=%v", completedRun, err)
