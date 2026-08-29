@@ -43,3 +43,7 @@ AgentMesh recovered a panic raised inside `Runtime.Execute`. Search structured l
 ## A canceled Run is still active on another replica
 
 The `canceled` state is durable and stale workers cannot replace it, but active context cancellation is process-local. If the API request reached a different replica from the worker, the external call may remain active until it returns or reaches `AGENTMESH_ATTEMPT_TIMEOUT`; its result is discarded. Use Agent Protocol idempotency to control side effects. Cross-replica cancellation signaling remains pending.
+
+## A Run reports `run.lease_lost`
+
+The worker could not renew the execution lease or Redis reported that another token owns it. AgentMesh cancels the runtime context and deliberately leaves the Run non-terminal so the queue can redeliver it. Check Redis connectivity and latency, then confirm `AGENTMESH_LEASE_TTL` is comfortably above transient network delays. A runtime that ignores context can continue side effects after ownership is lost; fencing protection is tracked separately.

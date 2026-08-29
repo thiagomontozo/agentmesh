@@ -524,6 +524,116 @@ func TestEngineLeasePreventsConcurrentDuplicateExecution(t *testing.T) {
 	}
 }
 
+func TestEngineRenewsLeaseForRunLongerThanTTL(t *testing.T) {
+	var calls atomic.Int32
+	started := make(chan struct{})
+	release := make(chan struct{})
+	executor := executorFunc(func(context.Context, domain.Agent, string) (string, error) {
+		if calls.Add(1) == 1 {
+			close(started)
+		}
+		<-release
+		return "done", nil
+	})
+	memory := store.NewMemory()
+	coordinator := coordination.NewMemory()
+	policy := testRetryPolicy(1)
+	policy.LeaseTTL = 60 * time.Millisecond
+	workerA := New(memory, events.NewBus(), executor, queue.NewMemory(4), coordinator, 1, policy)
+	workerB := New(memory, events.NewBus(), executor, queue.NewMemory(4), coordinator, 1, policy)
+	ctx, cancel := context.WithCancel(context.Background())
+	workerA.Start(ctx)
+	t.Cleanup(func() {
+		cancel()
+		workerA.Stop()
+	})
+	createTestData(t, memory, 1)
+	if err := workerA.Enqueue(ctx, "run_1"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for worker A")
+	}
+	time.Sleep(3 * policy.LeaseTTL)
+	if err := workerB.execute(ctx, "run_1"); err == nil || !strings.Contains(err.Error(), "already being processed") {
+		t.Fatalf("worker B acquired a renewed lease: %v", err)
+	}
+	close(release)
+	run := waitForStatus(t, memory, "run_1", domain.RunSucceeded)
+	if calls.Load() != 1 || run.Output != "done" {
+		t.Fatalf("long Run executed concurrently: calls=%d run=%+v", calls.Load(), run)
+	}
+	waitForReleasedLease(t, coordinator, "run:run_1")
+}
+
+func TestEngineStopsWithoutFinalizingAfterLeaseRenewalFailure(t *testing.T) {
+	coordinator := &failingRenewCoordinator{renewed: make(chan struct{})}
+	executorCanceled := make(chan struct{})
+	executor := executorFunc(func(ctx context.Context, _ domain.Agent, _ string) (string, error) {
+		<-ctx.Done()
+		close(executorCanceled)
+		return "", ctx.Err()
+	})
+	memory := store.NewMemory()
+	bus := events.NewBus()
+	policy := testRetryPolicy(1)
+	policy.LeaseTTL = 30 * time.Millisecond
+	policy.AttemptTimeout = time.Second
+	runEngine := New(memory, bus, executor, queue.NewMemory(1), coordinator, 1, policy)
+	createTestData(t, memory, 1)
+
+	err := runEngine.execute(context.Background(), "run_1")
+	if !errors.Is(err, ErrLeaseRenewal) || !errors.Is(err, coordination.ErrLeaseLost) {
+		t.Fatalf("expected lease renewal failure, got %v", err)
+	}
+	select {
+	case <-coordinator.renewed:
+	default:
+		t.Fatal("lease was not renewed")
+	}
+	select {
+	case <-executorCanceled:
+	default:
+		t.Fatal("runtime context was not canceled after lease loss")
+	}
+	if !coordinator.released.Load() {
+		t.Fatal("lease was not released after renewal failure")
+	}
+	run, getErr := memory.GetRun(context.Background(), "run_1")
+	if getErr != nil || run.Status != domain.RunRunning || run.CompletedAt != nil {
+		t.Fatalf("lease-lost Run was finalized: run=%+v err=%v", run, getErr)
+	}
+	assertRunEventTypes(t, bus, run.ID, "run.started", "run.lease_lost")
+}
+
+type failingRenewCoordinator struct {
+	renewed  chan struct{}
+	released atomic.Bool
+}
+
+func (c *failingRenewCoordinator) Acquire(context.Context, string, time.Duration) (coordination.Lease, bool, error) {
+	return &failingRenewLease{coordinator: c}, true, nil
+}
+
+func (*failingRenewCoordinator) Ping(context.Context) error { return nil }
+func (*failingRenewCoordinator) Close() error               { return nil }
+
+type failingRenewLease struct {
+	coordinator *failingRenewCoordinator
+}
+
+func (l *failingRenewLease) Renew(context.Context, time.Duration) error {
+	close(l.coordinator.renewed)
+	return coordination.ErrLeaseLost
+}
+
+func (l *failingRenewLease) Release(context.Context) error {
+	l.coordinator.released.Store(true)
+	return nil
+}
+
 func newEngineTest(t *testing.T, executor Executor, maxAttempts int) (*store.Memory, *queue.Memory, *Engine) {
 	t.Helper()
 	memory, memoryQueue, _, runEngine := newEngineTestWithPolicy(t, executor, testRetryPolicy(maxAttempts))

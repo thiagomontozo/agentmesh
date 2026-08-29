@@ -27,6 +27,7 @@
 - [x] Per-attempt runtime timeout
 - [x] Runtime panic isolation
 - [x] Persisted Run cancellation with stale-writer protection
+- [x] Ownership-safe execution lease renewal in Memory and Redis
 - [ ] LLM provider interface
 - [ ] OpenAI-compatible provider
 - [ ] MCP client and tool registry

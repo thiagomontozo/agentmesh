@@ -34,9 +34,65 @@ type RetryPolicy struct {
 }
 
 const DefaultAttemptTimeout = 30 * time.Second
+const DefaultLeaseTTL = 5 * time.Minute
 
 var ErrAttemptTimeout = errors.New("run attempt timed out")
 var ErrRuntimePanic = errors.New("runtime panic")
+var ErrLeaseRenewal = errors.New("run lease renewal failed")
+
+type leaseKeeper struct {
+	cancel context.CancelFunc
+	done   chan struct{}
+	mu     sync.RWMutex
+	err    error
+}
+
+func startLeaseKeeper(parent context.Context, lease coordination.Lease, ttl time.Duration, onFailure context.CancelFunc) *leaseKeeper {
+	ctx, cancel := context.WithCancel(parent)
+	keeper := &leaseKeeper{cancel: cancel, done: make(chan struct{})}
+	interval := ttl / 3
+	if interval <= 0 {
+		interval = ttl
+	}
+	go func() {
+		defer close(keeper.done)
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				renewCtx, cancelRenew := context.WithTimeout(ctx, interval)
+				err := lease.Renew(renewCtx, ttl)
+				cancelRenew()
+				if err == nil {
+					continue
+				}
+				if ctx.Err() != nil {
+					return
+				}
+				keeper.mu.Lock()
+				keeper.err = fmt.Errorf("%w: %w", ErrLeaseRenewal, err)
+				keeper.mu.Unlock()
+				onFailure()
+				return
+			}
+		}
+	}()
+	return keeper
+}
+
+func (k *leaseKeeper) Stop() {
+	k.cancel()
+	<-k.done
+}
+
+func (k *leaseKeeper) Err() error {
+	k.mu.RLock()
+	defer k.mu.RUnlock()
+	return k.err
+}
 
 func (d DemoExecutor) Execute(ctx context.Context, agent domain.Agent, input string) (string, error) {
 	timer := time.NewTimer(d.Delay)
@@ -73,6 +129,9 @@ func New(s store.Repository, bus *events.Bus, executor Executor, q queue.Queue, 
 func NewWithResolver(s store.Repository, bus *events.Bus, resolver agentruntime.Resolver, q queue.Queue, coord coordination.Coordinator, workers int, retry RetryPolicy) *Engine {
 	if retry.AttemptTimeout <= 0 {
 		retry.AttemptTimeout = DefaultAttemptTimeout
+	}
+	if retry.LeaseTTL <= 0 {
+		retry.LeaseTTL = DefaultLeaseTTL
 	}
 	return &Engine{
 		store:    s,
@@ -198,6 +257,8 @@ func (e *Engine) execute(ctx context.Context, runID string) error {
 		delete(e.active, run.ID)
 		e.activeMu.Unlock()
 	}()
+	keeper := startLeaseKeeper(ctx, lease, e.retry.LeaseTTL, cancelExecution)
+	defer keeper.Stop()
 
 	run, err = e.store.GetRun(ctx, run.ID)
 	if err != nil {
@@ -220,6 +281,12 @@ func (e *Engine) execute(ctx context.Context, runID string) error {
 		run.MaxAttempts = e.retry.MaxAttempts
 	}
 	for {
+		if renewalErr := e.leaseRenewalError(run.ID, keeper); renewalErr != nil {
+			return renewalErr
+		}
+		if runCtx.Err() != nil {
+			return nil
+		}
 		if run.Status == domain.RunQueued {
 			err = run.Start(time.Now())
 		} else {
@@ -242,6 +309,9 @@ func (e *Engine) execute(ctx context.Context, runID string) error {
 		})
 		attemptContextErr := attemptCtx.Err()
 		cancelAttempt()
+		if renewalErr := e.leaseRenewalError(run.ID, keeper); renewalErr != nil {
+			return renewalErr
+		}
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
@@ -275,6 +345,9 @@ func (e *Engine) execute(ctx context.Context, runID string) error {
 		select {
 		case <-runCtx.Done():
 			retryTimer.Stop()
+			if renewalErr := e.leaseRenewalError(run.ID, keeper); renewalErr != nil {
+				return renewalErr
+			}
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
@@ -282,6 +355,15 @@ func (e *Engine) execute(ctx context.Context, runID string) error {
 		case <-retryTimer.C:
 		}
 	}
+}
+
+func (e *Engine) leaseRenewalError(runID string, keeper *leaseKeeper) error {
+	err := keeper.Err()
+	if err == nil {
+		return nil
+	}
+	e.publish(runID, "run.lease_lost", err.Error())
+	return err
 }
 
 func executeRuntimeSafely(ctx context.Context, implementation agentruntime.Runtime, request agentruntime.ExecutionRequest) (result agentruntime.ExecutionResult, err error) {

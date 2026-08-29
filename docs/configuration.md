@@ -40,7 +40,7 @@ The API is available at `http://localhost:8080`. PostgreSQL migrations run autom
 | `AGENTMESH_RETRY_MAX_BACKOFF` | `5s` | Backoff cap; cannot be below the initial delay |
 | `AGENTMESH_NATS_ACK_WAIT` | `2m` | JetStream acknowledgement window; keep above the maximum expected execution time |
 | `AGENTMESH_CACHE_TTL` | `30s` | Redis TTL for agents and runs; must be positive |
-| `AGENTMESH_LEASE_TTL` | `5m` | Per-run distributed execution lease; keep above the longest executor attempt |
+| `AGENTMESH_LEASE_TTL` | `5m` | Per-run execution lease; renewed every third of the TTL and must be positive |
 | `AGENTMESH_DATABASE_URL` | none | Required in distributed mode |
 | `AGENTMESH_NATS_URL` | none | Required in distributed mode |
 | `AGENTMESH_REDIS_URL` | none | Required in distributed mode |
@@ -88,7 +88,8 @@ Runs interrupted by process shutdown remain recoverable. On the next distributed
 - Enable TLS and authentication for PostgreSQL, NATS, and Redis.
 - Do not expose dependency ports publicly.
 - Restrict who can register or change remote Agent endpoints, and apply outbound network policy to AgentMesh.
-- Set both `AGENTMESH_NATS_ACK_WAIT` and `AGENTMESH_LEASE_TTL` above the longest expected executor attempt.
+- Keep `AGENTMESH_NATS_ACK_WAIT` above the longest expected executor attempt so JetStream does not redeliver healthy work early.
+- Keep `AGENTMESH_LEASE_TTL` long enough to tolerate ordinary Redis latency. Active leases renew automatically, but one failed renewal conservatively stops execution.
 - Runtimes must honor context cancellation; AgentMesh does not detach runtime calls into goroutines to force-stop implementations that ignore context.
 - Back up PostgreSQL and the JetStream storage directory.
 - The current SSE event bus is process-local; use sticky routing for SSE clients until durable cross-replica events are implemented.
