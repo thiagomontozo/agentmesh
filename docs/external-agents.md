@@ -34,7 +34,7 @@ curl -X POST http://localhost:8080/api/v1/runs \
   -d '{"agent_id":"agt_REPLACE_ME","input":"Analyze this legal case"}'
 ```
 
-The Run's explicit `agent_id` determines the endpoint. Capabilities remain metadata and are not used for automatic routing.
+The Run can select this Agent explicitly by `agent_id`, or request deterministic routing through declared `required_capabilities`. Capability routing uses the common Agent definition and protocol; it does not hardcode endpoint-specific behavior in the Engine.
 
 ## Interoperability guarantee
 
@@ -50,4 +50,4 @@ The test servers are written in Go only as lightweight test infrastructure. No G
 
 ## Adding another Agent
 
-A third HTTP Agent using Protocol V1 can be added through `POST /api/v1/agents` while AgentMesh is running. It does not require a new Go executor, source-code change, recompilation, or restart. It does require the caller to select its `agent_id`; discovery and automatic routing are separate future capabilities.
+A third HTTP Agent using Protocol V1 can be added through `POST /api/v1/agents` while AgentMesh is running. It does not require a new Go executor, source-code change, recompilation, or restart. The caller may select its `agent_id` or supply exact `required_capabilities`; free-text semantic routing remains outside Router V1.

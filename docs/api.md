@@ -90,7 +90,7 @@ Read the derived operational status of an Agent:
 curl http://localhost:8080/api/v1/agents/agt_REPLACE_ME/health
 ```
 
-The response contains `unknown`, `healthy`, or `unhealthy`, plus `last_checked_at` and a controlled failure `reason` when available. Reading the endpoint is non-blocking: it returns the cached state and schedules a refresh. Legacy/demo and non-HTTP Agents remain `unknown`. Health is deliberately separate from the persisted Agent definition and is not used for routing yet.
+The response contains `unknown`, `healthy`, or `unhealthy`, plus `last_checked_at` and a controlled failure `reason` when available. Reading the endpoint is non-blocking: it returns the cached state and schedules a refresh. Legacy/demo and non-HTTP Agents remain `unknown`. Health is deliberately separate from the persisted Agent definition; Router V1 consumes this derived state using its documented healthy/unknown tiers.
 
 ## Runs
 
@@ -104,6 +104,22 @@ curl -i -X POST http://localhost:8080/api/v1/runs \
 ```
 
 A new run returns `202 Accepted`. Repeating the same key and payload returns `200 OK`, the original run, and `Idempotency-Replayed: true`. Reusing a key with a different payload returns `409 Conflict`.
+
+Alternatively, request deterministic capability routing without supplying `agent_id`:
+
+```bash
+curl -i -X POST http://localhost:8080/api/v1/runs \
+  -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: legal-analysis-001' \
+  -d '{
+    "required_capabilities":["legal-analysis","summarization"],
+    "input":"Analyze this legal case."
+  }'
+```
+
+`agent_id` and `required_capabilities` are mutually exclusive. The router requires every declared capability, excludes `unhealthy` Agents, prefers `healthy` Agents, and explicitly falls back to `unknown`. Within either tier, the oldest `created_at` wins and Agent ID breaks ties. No match returns `422 Unprocessable Entity`. The selected `agent_id` and normalized `required_capabilities` are persisted on the Run, so idempotency replay retains the original decision even if health later changes.
+
+The router does not infer requirements from `input`, use an LLM, balance by load, or replace direct `agent_id` selection.
 
 Run status progresses through `queued`, `running`, and a terminal state: `succeeded`, `failed`, or `canceled`. The response includes `request_id`, `attempt`, `max_attempts`, lifecycle timestamps, and `duration_ms`. Duration is explicit after a terminal transition and measures execution time from `started_at`, or total queued lifetime if execution never started.
 

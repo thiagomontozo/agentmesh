@@ -44,6 +44,8 @@
 - [x] Structured JSON logs, request correlation, instance/worker IDs, and Run duration
 - [x] Bounded background health checks for remote HTTP Agents
 - [x] Versioned Agent update/delete with dependency protection
+- [x] Normalized capabilities and exact Agent discovery filters
+- [x] Deterministic capability Router V1 with health-aware fallback
 - [ ] Authentication
 - [ ] RBAC
 - [ ] Audit log

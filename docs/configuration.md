@@ -106,4 +106,4 @@ Runs interrupted by process shutdown remain recoverable. On startup, queued work
 - Distributed SSE uses NATS pub/sub across replicas. Keep NATS available; publish failures are logged and only the publisher's local subscribers see the affected event.
 - Run event history is persisted in PostgreSQL and bounded by both age and count. SSE reconnects replay that bounded history; clients should still query the Run resource for authoritative final state.
 - `Last-Event-ID` filtering is not consumed yet. Clients may receive already processed events after reconnecting and should deduplicate by `event_id`.
-- Agent health is an in-memory, per-replica observation. Expect `unknown` after restart and do not treat it as a persisted configuration field or routing decision.
+- Agent health is an in-memory, per-replica observation. Expect `unknown` after restart. Router V1 excludes `unhealthy`, prefers `healthy`, and explicitly falls back to `unknown`, so replicas may temporarily choose different candidates while probes converge.

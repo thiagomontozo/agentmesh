@@ -25,6 +25,8 @@ The goal is to explore the engineering behind agent infrastructure rather than b
 flowchart LR
     C[Client] -->|REST| API[Go HTTP API]
     API --> S[(Repository)]
+    API --> AR[Capability Router]
+    AR --> S
     API --> Q[Queue]
     Q --> W1[Worker 1]
     Q --> W2[Worker 2]
@@ -82,6 +84,7 @@ The Engine resolves the already-selected Agent's runtime through a concurrency-s
 - Versioned Agent update/delete with optimistic concurrency and Run-history protection
 - Normalized, deduplicated Agent capabilities with exact indexed lookup
 - Deterministic Agent discovery by capability, runtime, protocol, and derived health
+- Deterministic capability Router with health exclusion and explicit unknown fallback
 - Restart recovery for queued/running work
 
 ## API
@@ -96,7 +99,7 @@ The Engine resolves the already-selected Agent's runtime through a concurrency-s
 | `PUT` | `/api/v1/agents/{id}` | Replace an Agent definition using `If-Match` |
 | `DELETE` | `/api/v1/agents/{id}` | Delete an unused Agent using `If-Match` |
 | `GET` | `/api/v1/agents/{id}/health` | Get derived Agent health and schedule refresh |
-| `POST` | `/api/v1/runs` | Submit a run |
+| `POST` | `/api/v1/runs` | Submit a Run by explicit Agent ID or required capabilities |
 | `GET` | `/api/v1/runs` | List runs |
 | `GET` | `/api/v1/runs/{id}` | Get run status/result |
 | `POST` | `/api/v1/runs/{id}/cancel` | Cancel a queued or running Run |

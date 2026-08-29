@@ -103,13 +103,21 @@ Terminal Runs expose persisted `duration_ms`, measured from execution start or, 
 
 One scheduler and a fixed worker pool perform checks; there is no goroutine per Agent. The queue is bounded and refresh submission is non-blocking, so slow or numerous Agents cannot block normal API handlers. `GET /api/v1/agents/{id}/health` returns the current state immediately and requests a refresh.
 
-Health is derived and process-local. A restarted or different replica initially reports `unknown` until its own probe completes. It is not persisted, does not modify Agent configuration, does not remove unhealthy Agents, and is not consulted by runtime resolution or routing.
+Health is derived and process-local. A restarted or different replica initially reports `unknown` until its own probe completes. It is not persisted, does not modify Agent configuration, and does not remove unhealthy Agents. Runtime resolution does not consult it; Router V1 uses it only to exclude `unhealthy`, prefer `healthy`, and apply the documented `unknown` fallback.
 
 ## Agent discovery
 
 `internal/discovery.Service` combines exact persisted filters (`capability`, `runtime`, and `protocol`) with the operational state exposed by `agenthealth.Registry`. Configuration filters run in the repository first; health filtering and pagination then operate on that bounded result without changing the Agent definition. Memory and PostgreSQL return a deterministic creation-time/ID order, and the service enforces the order again at its boundary.
 
-The public Agent listing exposes those filters with optional `limit`/`offset` pagination. A zero limit preserves the original unbounded list behavior; explicit pages are capped at 200. Discovery returns candidates only. It contains no task interpretation, ranking, fallback, load balancing, or Run creation and therefore is deliberately not an Agent Router.
+The public Agent listing exposes those filters with optional `limit`/`offset` pagination. A zero limit preserves the original unbounded list behavior; explicit pages are capped at 200. Discovery returns candidates only. It contains no task interpretation, ranking, fallback, load balancing, or Run creation.
+
+## Deterministic Agent Router V1
+
+`internal/router.Router` reuses discovery when Run submission supplies normalized `required_capabilities` instead of an explicit `agent_id`. It requires an Agent to declare every capability, excludes `unhealthy`, prefers `healthy`, and uses `unknown` as an explicit fallback. Discovery order—oldest `created_at`, then Agent ID—is the stable tie-breaker within a health tier. Each decision is emitted as a structured log with the selected Agent, requirements, health tier, strategy, and candidate count.
+
+The API still supports direct `agent_id`, and rejects requests that mix the two selection modes. The Run persists both the chosen Agent ID and routing requirements. This makes the decision auditable and allows an idempotency replay to return its original selection rather than rerouting after a health change.
+
+V1 is intentionally deterministic and declared-input-only: it does not inspect natural-language input, use LLMs or embeddings, balance by load, rank semantically, or discover capabilities implicitly. Health remains replica-local, so replicas can make different decisions while their probe state converges; the persisted Run and idempotency contract remain authoritative after creation.
 
 ## Agent Registry lifecycle
 

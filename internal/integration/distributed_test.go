@@ -172,13 +172,13 @@ func TestDistributedRunLifecycleAndIdempotency(t *testing.T) {
 
 	cancelCandidate := domain.Run{
 		ID: "run_cancel_" + suffix, AgentID: agent.ID, Input: "cancel", Status: domain.RunQueued,
-		MaxAttempts: 3, CreatedAt: time.Now().UTC(),
+		RequiredCapabilities: []string{"testing"}, MaxAttempts: 3, CreatedAt: time.Now().UTC(),
 	}
 	if _, _, err := repository.CreateRun(ctx, cancelCandidate, ""); err != nil {
 		t.Fatal(err)
 	}
 	canceled, err := repository.CancelRun(ctx, cancelCandidate.ID, time.Now())
-	if err != nil || canceled.Status != domain.RunCanceled {
+	if err != nil || canceled.Status != domain.RunCanceled || !slices.Equal(canceled.RequiredCapabilities, cancelCandidate.RequiredCapabilities) {
 		t.Fatalf("cancel PostgreSQL Run: run=%+v err=%v", canceled, err)
 	}
 	stale := cancelCandidate

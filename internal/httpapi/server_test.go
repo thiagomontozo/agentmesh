@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -300,6 +301,91 @@ func TestAgentDiscoveryFiltersHealthAndPaginates(t *testing.T) {
 	server.Handler().ServeHTTP(invalidResponse, invalid)
 	if invalidResponse.Code != http.StatusBadRequest {
 		t.Fatalf("expected conflicting aliases to fail: %d %s", invalidResponse.Code, invalidResponse.Body.String())
+	}
+}
+
+func TestCreateRunRoutesByRequiredCapabilitiesAndKeepsManualSelection(t *testing.T) {
+	server, _ := newTestServer(t)
+	health := healthMapRegistry{states: make(map[string]agenthealth.Status)}
+	server.SetAgentHealth(health)
+	agentIDs := make([]string, 0, 2)
+	for _, name := range []string{"Older Unhealthy", "Healthy"} {
+		request := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(
+			`{"name":"`+name+`","capabilities":["legal-analysis","summarization"]}`,
+		))
+		response := httptest.NewRecorder()
+		server.Handler().ServeHTTP(response, request)
+		if response.Code != http.StatusCreated {
+			t.Fatalf("create Agent failed: %d %s", response.Code, response.Body.String())
+		}
+		var agent domain.Agent
+		if err := json.Unmarshal(response.Body.Bytes(), &agent); err != nil {
+			t.Fatal(err)
+		}
+		agentIDs = append(agentIDs, agent.ID)
+	}
+	health.states[agentIDs[0]] = agenthealth.StatusUnhealthy
+	health.states[agentIDs[1]] = agenthealth.StatusHealthy
+
+	routedRequest := httptest.NewRequest(http.MethodPost, "/api/v1/runs", strings.NewReader(
+		`{"required_capabilities":["Legal Analysis","SUMMARIZATION"],"input":"analyze"}`,
+	))
+	routedRequest.Header.Set("Idempotency-Key", "routed-request")
+	routedResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(routedResponse, routedRequest)
+	if routedResponse.Code != http.StatusAccepted {
+		t.Fatalf("routed Run failed: %d %s", routedResponse.Code, routedResponse.Body.String())
+	}
+	var routed domain.Run
+	if err := json.Unmarshal(routedResponse.Body.Bytes(), &routed); err != nil {
+		t.Fatal(err)
+	}
+	if routed.AgentID != agentIDs[1] || !slices.Equal(routed.RequiredCapabilities, []string{"legal-analysis", "summarization"}) {
+		t.Fatalf("unexpected routed Run: %+v", routed)
+	}
+
+	// A health change must not break replay of the same routed request.
+	health.states[agentIDs[0]] = agenthealth.StatusHealthy
+	health.states[agentIDs[1]] = agenthealth.StatusUnhealthy
+	replay := httptest.NewRequest(http.MethodPost, "/api/v1/runs", strings.NewReader(
+		`{"required_capabilities":["legal-analysis","summarization"],"input":"analyze"}`,
+	))
+	replay.Header.Set("Idempotency-Key", "routed-request")
+	replayResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(replayResponse, replay)
+	if replayResponse.Code != http.StatusOK || replayResponse.Header().Get("Idempotency-Replayed") != "true" {
+		t.Fatalf("routed replay failed: %d %s", replayResponse.Code, replayResponse.Body.String())
+	}
+	var replayed domain.Run
+	if err := json.Unmarshal(replayResponse.Body.Bytes(), &replayed); err != nil || replayed.ID != routed.ID || replayed.AgentID != routed.AgentID {
+		t.Fatalf("replay did not retain original decision: run=%+v err=%v", replayed, err)
+	}
+
+	manual := httptest.NewRequest(http.MethodPost, "/api/v1/runs", strings.NewReader(
+		`{"agent_id":"`+agentIDs[1]+`","input":"manual"}`,
+	))
+	manualResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(manualResponse, manual)
+	if manualResponse.Code != http.StatusAccepted {
+		t.Fatalf("manual selection regressed: %d %s", manualResponse.Code, manualResponse.Body.String())
+	}
+
+	ambiguous := httptest.NewRequest(http.MethodPost, "/api/v1/runs", strings.NewReader(
+		`{"agent_id":"`+agentIDs[1]+`","required_capabilities":["testing"],"input":"ambiguous"}`,
+	))
+	ambiguousResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(ambiguousResponse, ambiguous)
+	if ambiguousResponse.Code != http.StatusBadRequest {
+		t.Fatalf("expected ambiguous selection rejection: %d %s", ambiguousResponse.Code, ambiguousResponse.Body.String())
+	}
+
+	missing := httptest.NewRequest(http.MethodPost, "/api/v1/runs", strings.NewReader(
+		`{"required_capabilities":["nonexistent"],"input":"missing"}`,
+	))
+	missingResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(missingResponse, missing)
+	if missingResponse.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected no-candidate 422: %d %s", missingResponse.Code, missingResponse.Body.String())
 	}
 }
 

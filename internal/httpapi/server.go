@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -20,6 +21,7 @@ import (
 	"github.com/thiagomontozo/agentmesh/internal/engine"
 	"github.com/thiagomontozo/agentmesh/internal/events"
 	"github.com/thiagomontozo/agentmesh/internal/observability"
+	agentrouter "github.com/thiagomontozo/agentmesh/internal/router"
 	"github.com/thiagomontozo/agentmesh/internal/store"
 )
 
@@ -31,6 +33,7 @@ type Server struct {
 	instanceID  string
 	agentHealth agenthealth.Registry
 	discovery   *discovery.Service
+	agentRouter *agentrouter.Router
 }
 
 func New(s store.Repository, e *engine.Engine, bus events.Broker) *Server {
@@ -43,6 +46,7 @@ func NewWithInstanceID(s store.Repository, e *engine.Engine, bus events.Broker, 
 		agentHealth: agenthealth.Noop{},
 	}
 	server.discovery = discovery.New(s, server.agentHealth)
+	server.agentRouter = agentrouter.New(server.discovery)
 	server.routes()
 	return server
 }
@@ -51,6 +55,7 @@ func (s *Server) SetAgentHealth(registry agenthealth.Registry) {
 	if registry != nil {
 		s.agentHealth = registry
 		s.discovery = discovery.New(s.store, registry)
+		s.agentRouter = agentrouter.New(s.discovery)
 	}
 }
 
@@ -328,8 +333,9 @@ func setAgentETag(w http.ResponseWriter, version int64) {
 }
 
 type createRunRequest struct {
-	AgentID string `json:"agent_id"`
-	Input   string `json:"input"`
+	AgentID              string   `json:"agent_id"`
+	RequiredCapabilities []string `json:"required_capabilities"`
+	Input                string   `json:"input"`
 }
 
 func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
@@ -341,11 +347,36 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 
 	request.AgentID = strings.TrimSpace(request.AgentID)
 	request.Input = strings.TrimSpace(request.Input)
-	if request.AgentID == "" || request.Input == "" {
-		writeError(w, http.StatusBadRequest, "agent_id and input are required")
+	if request.Input == "" {
+		writeError(w, http.StatusBadRequest, "input is required")
 		return
 	}
-	if _, err := s.store.GetAgent(r.Context(), request.AgentID); errors.Is(err, store.ErrNotFound) {
+	if request.AgentID != "" && len(request.RequiredCapabilities) > 0 {
+		writeError(w, http.StatusBadRequest, "agent_id and required_capabilities are mutually exclusive")
+		return
+	}
+	if request.AgentID == "" && len(request.RequiredCapabilities) == 0 {
+		writeError(w, http.StatusBadRequest, "agent_id or required_capabilities is required")
+		return
+	}
+	routed := request.AgentID == ""
+	if routed {
+		decision, err := s.agentRouter.Select(r.Context(), request.RequiredCapabilities)
+		if errors.Is(err, agentrouter.ErrInvalidRequirements) {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if errors.Is(err, agentrouter.ErrNoCandidate) {
+			writeError(w, http.StatusUnprocessableEntity, err.Error())
+			return
+		}
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "could not route run")
+			return
+		}
+		request.AgentID = decision.Agent.ID
+		request.RequiredCapabilities = decision.RequiredCapabilities
+	} else if _, err := s.store.GetAgent(r.Context(), request.AgentID); errors.Is(err, store.ErrNotFound) {
 		writeError(w, http.StatusNotFound, "agent not found")
 		return
 	} else if err != nil {
@@ -359,13 +390,14 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 	}
 
 	run := domain.Run{
-		ID:          newID("run"),
-		AgentID:     request.AgentID,
-		Input:       request.Input,
-		Status:      domain.RunQueued,
-		MaxAttempts: s.engine.MaxAttempts(),
-		RequestID:   observability.RequestID(r.Context()),
-		CreatedAt:   time.Now().UTC(),
+		ID:                   newID("run"),
+		AgentID:              request.AgentID,
+		RequiredCapabilities: request.RequiredCapabilities,
+		Input:                request.Input,
+		Status:               domain.RunQueued,
+		MaxAttempts:          s.engine.MaxAttempts(),
+		RequestID:            observability.RequestID(r.Context()),
+		CreatedAt:            time.Now().UTC(),
 	}
 	createdRun, isNew, err := s.store.CreateRun(r.Context(), run, idempotencyKey)
 	if err != nil {
@@ -373,7 +405,12 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !isNew {
-		if createdRun.AgentID != request.AgentID || createdRun.Input != request.Input {
+		requestChanged := createdRun.Input != request.Input ||
+			!slices.Equal(createdRun.RequiredCapabilities, request.RequiredCapabilities)
+		if !routed {
+			requestChanged = requestChanged || createdRun.AgentID != request.AgentID
+		}
+		if requestChanged {
 			writeError(w, http.StatusConflict, "Idempotency-Key was already used with a different request")
 			return
 		}
