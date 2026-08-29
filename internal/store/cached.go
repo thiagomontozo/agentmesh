@@ -119,19 +119,19 @@ func (c *Cached) ListRuns(ctx context.Context) ([]domain.Run, error) {
 	return c.inner.ListRuns(ctx)
 }
 
-func (c *Cached) RecoverPendingRuns(ctx context.Context) ([]string, error) {
-	ids, err := c.inner.RecoverPendingRuns(ctx)
+func (c *Cached) ListPendingRuns(ctx context.Context) ([]PendingRun, error) {
+	return c.inner.ListPendingRuns(ctx)
+}
+
+func (c *Cached) RecoverRun(ctx context.Context, id string, minimumFence int64) (bool, error) {
+	recovered, err := c.inner.RecoverRun(ctx, id, minimumFence)
 	if err != nil {
-		return nil, err
+		return false, err
 	}
-	keys := make([]string, 0, len(ids))
-	for _, id := range ids {
-		keys = append(keys, runKey(id))
+	if recovered {
+		c.delete(ctx, runKey(id))
 	}
-	if err := c.cache.Delete(ctx, keys...); err != nil {
-		slog.Warn("run cache invalidation failed", "error", err)
-	}
-	return ids, nil
+	return recovered, nil
 }
 
 func (c *Cached) Ping(ctx context.Context) error {

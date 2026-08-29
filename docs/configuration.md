@@ -82,7 +82,7 @@ Queued and running Runs can be canceled through the API. Cancellation is persist
 
 Each acquired lease has a monotonic fencing token. The Engine claims a newer PostgreSQL/Memory execution fence before running and includes that fence in every lifecycle write. An executor from an older lease cannot publish a late success or failure after a newer owner claims the Run. This guarantee applies to AgentMesh state only; remote Agent side effects must still honor the protocol idempotency key.
 
-Runs interrupted by process shutdown remain recoverable. On the next distributed startup, `running` runs are reset to `queued` and queued work is republished using the run ID as its JetStream deduplication key.
+Runs interrupted by process shutdown remain recoverable. On startup, queued work is republished using the Run ID as its JetStream deduplication key. Running work is requeued only after the recovering instance acquires its expired/missing lease and advances the execution fence; a Run still owned by another healthy replica is left untouched.
 
 ## Production notes
 

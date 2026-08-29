@@ -29,6 +29,7 @@
 - [x] Persisted Run cancellation with stale-writer protection
 - [x] Ownership-safe execution lease renewal in Memory and Redis
 - [x] Monotonic execution fencing enforced by Run persistence
+- [x] Lease-aware, fenced multi-replica Run recovery
 - [ ] LLM provider interface
 - [ ] OpenAI-compatible provider
 - [ ] MCP client and tool registry
