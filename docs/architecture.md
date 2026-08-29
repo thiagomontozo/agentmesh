@@ -64,7 +64,9 @@ Distributed mode is enabled with `AGENTMESH_MODE=distributed`:
 
 - PostgreSQL stores agents, run state, attempt counters, timestamps, and idempotency keys. Embedded, ordered SQL migrations run at startup.
 - NATS JetStream durably stores run work. A named stream and durable pull consumer use explicit acknowledgements. Executor failures are retried by the engine; exhausted runs are published to `agentmesh.runs.dlq` before being marked failed.
-- Redis caches agent and run reads and provides token-protected execution leases, preventing two replicas from executing the same run concurrently. Cache failures fall back to PostgreSQL, while coordination failures stop delivery and make readiness fail.
+- Redis caches agent and run reads and provides token-protected execution leases. The Engine renews an active lease every third of its TTL, so a context-aware Run can safely exceed the original lease duration. Memory leases implement the same ownership and expiration contract. Cache failures fall back to PostgreSQL, while coordination failures stop delivery and make readiness fail.
+
+Lease renewal is conservative: if renewal fails or ownership is lost, the Engine cancels the runtime context, emits `run.lease_lost`, does not finalize the Run, and returns an error so the queue can redeliver it. Renewal stops before lease release on every execution exit. This prevents normal long executions from silently outliving their lease, but without fencing an old context-ignoring executor could still overlap a new owner after TTL expiry; stale finalization protection beyond cancellation is the next hardening step.
 
 At startup, runs left in `running` state are reset to `queued`; queued runs are republished with their run ID as the JetStream deduplication key. This closes the common restart gap between database state and queue delivery without introducing a second scheduler.
 

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/thiagomontozo/agentmesh/internal/cache"
+	"github.com/thiagomontozo/agentmesh/internal/coordination"
 	"github.com/thiagomontozo/agentmesh/internal/domain"
 	"github.com/thiagomontozo/agentmesh/internal/engine"
 	"github.com/thiagomontozo/agentmesh/internal/events"
@@ -133,6 +134,40 @@ func TestDistributedRunLifecycleAndIdempotency(t *testing.T) {
 	}
 	if _, err := repository.CancelRun(ctx, cancelCandidate.ID, time.Now()); !errors.Is(err, domain.ErrRunNotCancelable) {
 		t.Fatalf("expected repeated cancel conflict, got %v", err)
+	}
+	testRedisLeaseRenewal(t, ctx, redisCache, "integration:"+suffix)
+}
+
+func testRedisLeaseRenewal(t *testing.T, ctx context.Context, coordinator coordination.Coordinator, key string) {
+	t.Helper()
+	stale, acquired, err := coordinator.Acquire(ctx, key, 200*time.Millisecond)
+	if err != nil || !acquired {
+		t.Fatalf("acquire Redis lease: acquired=%v err=%v", acquired, err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if err := stale.Renew(ctx, 400*time.Millisecond); err != nil {
+		t.Fatalf("renew Redis lease: %v", err)
+	}
+	time.Sleep(250 * time.Millisecond)
+	if _, acquired, err := coordinator.Acquire(ctx, key, time.Second); err != nil || acquired {
+		t.Fatalf("renewed Redis lease expired early: acquired=%v err=%v", acquired, err)
+	}
+	time.Sleep(250 * time.Millisecond)
+	owner, acquired, err := coordinator.Acquire(ctx, key, time.Second)
+	if err != nil || !acquired {
+		t.Fatalf("acquire Redis lease after expiry: acquired=%v err=%v", acquired, err)
+	}
+	if err := stale.Renew(ctx, time.Second); !errors.Is(err, coordination.ErrLeaseLost) {
+		t.Fatalf("expected old Redis owner renewal to fail, got %v", err)
+	}
+	if err := stale.Release(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, acquired, err := coordinator.Acquire(ctx, key, time.Second); err != nil || acquired {
+		t.Fatalf("old Redis owner released current lease: acquired=%v err=%v", acquired, err)
+	}
+	if err := owner.Release(ctx); err != nil {
+		t.Fatal(err)
 	}
 }
 

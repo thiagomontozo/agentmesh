@@ -71,6 +71,7 @@ The Engine resolves the already-selected Agent's runtime through a concurrency-s
 - Configurable per-attempt execution timeout
 - Runtime panic isolation at the execution boundary
 - Explicit cancellation for queued and running Runs
+- Automatic execution-lease renewal for long-running Runs
 - Restart recovery for queued/running work
 
 ## API

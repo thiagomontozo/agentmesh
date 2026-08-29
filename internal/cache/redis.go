@@ -66,6 +66,9 @@ func (r *Redis) Ping(ctx context.Context) error {
 func (r *Redis) Close() error { return r.client.Close() }
 
 func (r *Redis) Acquire(ctx context.Context, key string, ttl time.Duration) (coordination.Lease, bool, error) {
+	if ttl <= 0 {
+		return nil, false, coordination.ErrInvalidLeaseTTL
+	}
 	random := make([]byte, 16)
 	if _, err := rand.Read(random); err != nil {
 		return nil, false, fmt.Errorf("generate lease token: %w", err)
@@ -94,6 +97,31 @@ var releaseLease = redis.NewScript(`
 	end
 	return 0
 `)
+
+var renewLease = redis.NewScript(`
+	if redis.call("GET", KEYS[1]) == ARGV[1] then
+		return redis.call("PEXPIRE", KEYS[1], ARGV[2])
+	end
+	return 0
+`)
+
+func (l *redisLease) Renew(ctx context.Context, ttl time.Duration) error {
+	if ttl <= 0 {
+		return coordination.ErrInvalidLeaseTTL
+	}
+	ttlMillis := ttl.Milliseconds()
+	if ttlMillis < 1 {
+		ttlMillis = 1
+	}
+	renewed, err := renewLease.Run(ctx, l.client, []string{l.key}, l.token, ttlMillis).Int()
+	if err != nil {
+		return fmt.Errorf("renew Redis lease: %w", err)
+	}
+	if renewed != 1 {
+		return coordination.ErrLeaseLost
+	}
+	return nil
+}
 
 func (l *redisLease) Release(ctx context.Context) error {
 	if err := releaseLease.Run(ctx, l.client, []string{l.key}, l.token).Err(); err != nil {
