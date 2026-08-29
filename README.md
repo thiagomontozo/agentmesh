@@ -222,6 +222,7 @@ docs/                   roadmap and architecture notes
 - [Configuration and operations](docs/configuration.md)
 - [API usage and examples](docs/api.md)
 - [Troubleshooting](docs/troubleshooting.md)
+- [Semantic / LLM Router analysis](docs/semantic-router-analysis.md)
 - [Roadmap](docs/roadmap.md)
 
 ## Next milestones
