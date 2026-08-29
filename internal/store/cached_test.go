@@ -130,3 +130,45 @@ func TestCachedRepositoryPreservesCanceledRunAgainstStaleWriter(t *testing.T) {
 		t.Fatalf("cache did not preserve canceled state: run=%+v err=%v", loaded, err)
 	}
 }
+
+func TestCachedRepositoryDoesNotCacheStaleFencedWrite(t *testing.T) {
+	ctx := context.Background()
+	inner := NewMemory()
+	repository := NewCached(inner, newFakeCache(), time.Minute)
+	run := domain.Run{ID: "run_1", Status: domain.RunQueued, MaxAttempts: 2}
+	if _, _, err := repository.CreateRun(ctx, run, ""); err != nil {
+		t.Fatal(err)
+	}
+	first, err := repository.ClaimRunExecution(ctx, run.ID, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := run.Start(time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.UpdateRunFenced(ctx, run, first); err != nil {
+		t.Fatal(err)
+	}
+	second, err := repository.ClaimRunExecution(ctx, run.ID, first+1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current := run
+	if err := current.Succeed("current", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.UpdateRunFenced(ctx, current, second); err != nil {
+		t.Fatal(err)
+	}
+	stale := run
+	if err := stale.Succeed("stale", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.UpdateRunFenced(ctx, stale, first); !errors.Is(err, ErrStaleExecution) {
+		t.Fatalf("expected stale write rejection, got %v", err)
+	}
+	loaded, err := repository.GetRun(ctx, run.ID)
+	if err != nil || loaded.Output != "current" {
+		t.Fatalf("cache exposed stale result: run=%+v err=%v", loaded, err)
+	}
+}

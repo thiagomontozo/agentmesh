@@ -2,10 +2,9 @@ package cache
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -69,17 +68,18 @@ func (r *Redis) Acquire(ctx context.Context, key string, ttl time.Duration) (coo
 	if ttl <= 0 {
 		return nil, false, coordination.ErrInvalidLeaseTTL
 	}
-	random := make([]byte, 16)
-	if _, err := rand.Read(random); err != nil {
-		return nil, false, fmt.Errorf("generate lease token: %w", err)
-	}
-	token := hex.EncodeToString(random)
 	redisKey := "agentmesh:lease:" + key
-	acquired, err := r.client.SetNX(ctx, redisKey, token, ttl).Result()
+	ttlMillis := ttl.Milliseconds()
+	if ttlMillis < 1 {
+		ttlMillis = 1
+	}
+	token, err := acquireLease.Run(ctx, r.client,
+		[]string{redisKey, "agentmesh:fence:sequence"}, ttlMillis,
+	).Int64()
 	if err != nil {
 		return nil, false, fmt.Errorf("acquire Redis lease: %w", err)
 	}
-	if !acquired {
+	if token == 0 {
 		return nil, false, nil
 	}
 	return &redisLease{client: r.client, key: redisKey, token: token}, true, nil
@@ -88,8 +88,19 @@ func (r *Redis) Acquire(ctx context.Context, key string, ttl time.Duration) (coo
 type redisLease struct {
 	client *redis.Client
 	key    string
-	token  string
+	token  int64
 }
+
+func (l *redisLease) FencingToken() int64 { return l.token }
+
+var acquireLease = redis.NewScript(`
+	if redis.call("EXISTS", KEYS[1]) == 1 then
+		return 0
+	end
+	local token = redis.call("INCR", KEYS[2])
+	redis.call("PSETEX", KEYS[1], ARGV[1], token)
+	return token
+`)
 
 var releaseLease = redis.NewScript(`
 	if redis.call("GET", KEYS[1]) == ARGV[1] then
@@ -113,7 +124,7 @@ func (l *redisLease) Renew(ctx context.Context, ttl time.Duration) error {
 	if ttlMillis < 1 {
 		ttlMillis = 1
 	}
-	renewed, err := renewLease.Run(ctx, l.client, []string{l.key}, l.token, ttlMillis).Int()
+	renewed, err := renewLease.Run(ctx, l.client, []string{l.key}, strconv.FormatInt(l.token, 10), ttlMillis).Int()
 	if err != nil {
 		return fmt.Errorf("renew Redis lease: %w", err)
 	}
@@ -124,7 +135,7 @@ func (l *redisLease) Renew(ctx context.Context, ttl time.Duration) error {
 }
 
 func (l *redisLease) Release(ctx context.Context) error {
-	if err := releaseLease.Run(ctx, l.client, []string{l.key}, l.token).Err(); err != nil {
+	if err := releaseLease.Run(ctx, l.client, []string{l.key}, strconv.FormatInt(l.token, 10)).Err(); err != nil {
 		return fmt.Errorf("release Redis lease: %w", err)
 	}
 	return nil

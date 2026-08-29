@@ -608,6 +608,50 @@ func TestEngineStopsWithoutFinalizingAfterLeaseRenewalFailure(t *testing.T) {
 	assertRunEventTypes(t, bus, run.ID, "run.started", "run.lease_lost")
 }
 
+func TestExecutionFencePreventsSplitBrainFinalization(t *testing.T) {
+	memory := store.NewMemory()
+	createTestData(t, memory, 2)
+	oldStarted := make(chan struct{})
+	releaseOld := make(chan struct{})
+	oldExecutor := executorFunc(func(context.Context, domain.Agent, string) (string, error) {
+		close(oldStarted)
+		<-releaseOld
+		return "old owner", nil
+	})
+	newExecutor := executorFunc(func(context.Context, domain.Agent, string) (string, error) {
+		return "new owner", nil
+	})
+	policy := testRetryPolicy(2)
+	oldWorker := New(memory, events.NewBus(), oldExecutor, queue.NewMemory(1), coordination.NewMemory(), 1, policy)
+	newWorker := New(memory, events.NewBus(), newExecutor, queue.NewMemory(1), coordination.NewMemory(), 1, policy)
+	oldResult := make(chan error, 1)
+	go func() {
+		oldResult <- oldWorker.execute(context.Background(), "run_1")
+	}()
+	select {
+	case <-oldStarted:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for old owner")
+	}
+
+	if err := newWorker.execute(context.Background(), "run_1"); err != nil {
+		t.Fatalf("new owner execution failed: %v", err)
+	}
+	close(releaseOld)
+	select {
+	case err := <-oldResult:
+		if !errors.Is(err, store.ErrStaleExecution) {
+			t.Fatalf("old owner was not fenced: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("old owner did not return")
+	}
+	run, err := memory.GetRun(context.Background(), "run_1")
+	if err != nil || run.Status != domain.RunSucceeded || run.Output != "new owner" || run.Attempt != 2 {
+		t.Fatalf("old owner overwrote the current result: run=%+v err=%v", run, err)
+	}
+}
+
 type failingRenewCoordinator struct {
 	renewed  chan struct{}
 	released atomic.Bool
@@ -623,6 +667,8 @@ func (*failingRenewCoordinator) Close() error               { return nil }
 type failingRenewLease struct {
 	coordinator *failingRenewCoordinator
 }
+
+func (*failingRenewLease) FencingToken() int64 { return 1 }
 
 func (l *failingRenewLease) Renew(context.Context, time.Duration) error {
 	close(l.coordinator.renewed)

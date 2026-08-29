@@ -10,6 +10,7 @@ var ErrLeaseLost = errors.New("lease ownership lost")
 var ErrInvalidLeaseTTL = errors.New("lease TTL must be positive")
 
 type Lease interface {
+	FencingToken() int64
 	Renew(ctx context.Context, ttl time.Duration) error
 	Release(ctx context.Context) error
 }

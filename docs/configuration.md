@@ -80,6 +80,8 @@ A panic raised by a runtime or legacy executor is recovered only at the runtime-
 
 Queued and running Runs can be canceled through the API. Cancellation is persisted before local execution is interrupted, so a stale completion cannot replace it. With multiple replicas, only an execution owned by the API replica receives immediate context cancellation; another replica continues until its current call returns or times out, then its update is rejected. Distributed signaling is intentionally deferred rather than presenting local-only cancellation as a complete multi-node guarantee.
 
+Each acquired lease has a monotonic fencing token. The Engine claims a newer PostgreSQL/Memory execution fence before running and includes that fence in every lifecycle write. An executor from an older lease cannot publish a late success or failure after a newer owner claims the Run. This guarantee applies to AgentMesh state only; remote Agent side effects must still honor the protocol idempotency key.
+
 Runs interrupted by process shutdown remain recoverable. On the next distributed startup, `running` runs are reset to `queued` and queued work is republished using the run ID as its JetStream deduplication key.
 
 ## Production notes
@@ -90,6 +92,7 @@ Runs interrupted by process shutdown remain recoverable. On the next distributed
 - Restrict who can register or change remote Agent endpoints, and apply outbound network policy to AgentMesh.
 - Keep `AGENTMESH_NATS_ACK_WAIT` above the longest expected executor attempt so JetStream does not redeliver healthy work early.
 - Keep `AGENTMESH_LEASE_TTL` long enough to tolerate ordinary Redis latency. Active leases renew automatically, but one failed renewal conservatively stops execution.
+- Preserve Redis AOF data in distributed deployments so coordination counters remain monotonic operationally; the repository claim remains authoritative for Run writes.
 - Runtimes must honor context cancellation; AgentMesh does not detach runtime calls into goroutines to force-stop implementations that ignore context.
 - Back up PostgreSQL and the JetStream storage directory.
 - The current SSE event bus is process-local; use sticky routing for SSE clients until durable cross-replica events are implemented.

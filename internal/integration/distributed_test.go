@@ -135,6 +135,46 @@ func TestDistributedRunLifecycleAndIdempotency(t *testing.T) {
 	if _, err := repository.CancelRun(ctx, cancelCandidate.ID, time.Now()); !errors.Is(err, domain.ErrRunNotCancelable) {
 		t.Fatalf("expected repeated cancel conflict, got %v", err)
 	}
+
+	fencedRun := domain.Run{
+		ID: "run_fence_" + suffix, AgentID: agent.ID, Input: "fence", Status: domain.RunQueued,
+		MaxAttempts: 2, CreatedAt: time.Now().UTC(),
+	}
+	if _, _, err := repository.CreateRun(ctx, fencedRun, ""); err != nil {
+		t.Fatal(err)
+	}
+	firstFence, err := repository.ClaimRunExecution(ctx, fencedRun.ID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fencedRun.Start(time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.UpdateRunFenced(ctx, fencedRun, firstFence); err != nil {
+		t.Fatal(err)
+	}
+	secondFence, err := repository.ClaimRunExecution(ctx, fencedRun.ID, 2)
+	if err != nil || secondFence <= firstFence {
+		t.Fatalf("claim newer PostgreSQL fence: first=%d second=%d err=%v", firstFence, secondFence, err)
+	}
+	staleFencedRun := fencedRun
+	if err := staleFencedRun.Succeed("stale", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.UpdateRunFenced(ctx, staleFencedRun, firstFence); !errors.Is(err, store.ErrStaleExecution) {
+		t.Fatalf("expected PostgreSQL to reject stale fence, got %v", err)
+	}
+	currentFencedRun := fencedRun
+	if err := currentFencedRun.Succeed("current", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.UpdateRunFenced(ctx, currentFencedRun, secondFence); err != nil {
+		t.Fatal(err)
+	}
+	loadedFencedRun, err := repository.GetRun(ctx, fencedRun.ID)
+	if err != nil || loadedFencedRun.Output != "current" {
+		t.Fatalf("current PostgreSQL fence did not win: run=%+v err=%v", loadedFencedRun, err)
+	}
 	testRedisLeaseRenewal(t, ctx, redisCache, "integration:"+suffix)
 }
 
@@ -156,6 +196,9 @@ func testRedisLeaseRenewal(t *testing.T, ctx context.Context, coordinator coordi
 	owner, acquired, err := coordinator.Acquire(ctx, key, time.Second)
 	if err != nil || !acquired {
 		t.Fatalf("acquire Redis lease after expiry: acquired=%v err=%v", acquired, err)
+	}
+	if owner.FencingToken() <= stale.FencingToken() {
+		t.Fatalf("Redis fencing token did not increase: stale=%d owner=%d", stale.FencingToken(), owner.FencingToken())
 	}
 	if err := stale.Renew(ctx, time.Second); !errors.Is(err, coordination.ErrLeaseLost) {
 		t.Fatalf("expected old Redis owner renewal to fail, got %v", err)

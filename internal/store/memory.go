@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sort"
 	"sync"
 	"time"
@@ -16,6 +17,7 @@ type Memory struct {
 	mu              sync.RWMutex
 	agents          map[string]domain.Agent
 	runs            map[string]domain.Run
+	runFences       map[string]int64
 	idempotencyKeys map[string]string
 }
 
@@ -25,6 +27,7 @@ func NewMemory() *Memory {
 	return &Memory{
 		agents:          make(map[string]domain.Agent),
 		runs:            make(map[string]domain.Run),
+		runFences:       make(map[string]int64),
 		idempotencyKeys: make(map[string]string),
 	}
 }
@@ -92,6 +95,47 @@ func (m *Memory) UpdateRun(_ context.Context, run domain.Run) error {
 	}
 	if existing.Status == domain.RunCanceled {
 		return ErrRunCanceled
+	}
+	if m.runFences[run.ID] != 0 {
+		return ErrStaleExecution
+	}
+	m.runs[run.ID] = run
+	return nil
+}
+
+func (m *Memory) ClaimRunExecution(_ context.Context, id string, minimumFence int64) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	run, ok := m.runs[id]
+	if !ok {
+		return 0, ErrNotFound
+	}
+	if run.Status == domain.RunCanceled {
+		return 0, ErrRunCanceled
+	}
+	if run.Status != domain.RunQueued && run.Status != domain.RunRunning {
+		return 0, fmt.Errorf("%w from status %s", ErrRunNotExecutable, run.Status)
+	}
+	next := m.runFences[id] + 1
+	if minimumFence > next {
+		next = minimumFence
+	}
+	m.runFences[id] = next
+	return next, nil
+}
+
+func (m *Memory) UpdateRunFenced(_ context.Context, run domain.Run, fence int64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	existing, ok := m.runs[run.ID]
+	if !ok {
+		return ErrNotFound
+	}
+	if existing.Status == domain.RunCanceled {
+		return ErrRunCanceled
+	}
+	if fence <= 0 || m.runFences[run.ID] != fence {
+		return ErrStaleExecution
 	}
 	m.runs[run.ID] = run
 	return nil

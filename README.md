@@ -72,6 +72,7 @@ The Engine resolves the already-selected Agent's runtime through a concurrency-s
 - Runtime panic isolation at the execution boundary
 - Explicit cancellation for queued and running Runs
 - Automatic execution-lease renewal for long-running Runs
+- Monotonic fencing tokens for stale-worker write protection
 - Restart recovery for queued/running work
 
 ## API
