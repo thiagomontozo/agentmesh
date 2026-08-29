@@ -3,6 +3,7 @@ package router
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -35,7 +36,7 @@ func TestSelectPrefersHealthyAndMatchesEveryCapability(t *testing.T) {
 		t.Fatal(err)
 	}
 	if decision.Agent.ID != "agt_healthy" || decision.Health != agenthealth.StatusHealthy ||
-		decision.Strategy != "healthy-created-at-id" || len(decision.RequiredCapabilities) != 2 {
+		decision.Strategy != "healthy-load-priority-created-at-id" || len(decision.RequiredCapabilities) != 2 {
 		t.Fatalf("unexpected routing decision: %+v", decision)
 	}
 }
@@ -75,13 +76,105 @@ func TestSelectUsesUnknownFallbackAndExcludesUnhealthy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if decision.Agent.ID != "agt_unknown" || decision.Strategy != "unknown-fallback-created-at-id" {
+	if decision.Agent.ID != "agt_unknown" || decision.Strategy != "unknown-fallback-load-priority-created-at-id" {
 		t.Fatalf("unexpected fallback: %+v", decision)
 	}
 
 	health["agt_unknown"] = agenthealth.StatusUnhealthy
 	if _, err := New(discovery.New(repository, health)).Select(context.Background(), []string{"testing"}); !errors.Is(err, ErrNoCandidate) {
 		t.Fatalf("expected no eligible candidate, got %v", err)
+	}
+}
+
+func TestSelectPrefersFreeAgent(t *testing.T) {
+	repository := store.NewMemory()
+	now := time.Now().UTC()
+	for _, agent := range []domain.Agent{
+		{ID: "agt_busy", Name: "Busy", Capabilities: []string{"testing"}, MaxConcurrency: 2, CreatedAt: now.Add(-time.Hour)},
+		{ID: "agt_free", Name: "Free", Capabilities: []string{"testing"}, MaxConcurrency: 2, CreatedAt: now},
+	} {
+		if _, err := repository.CreateAgent(context.Background(), agent); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, _, err := repository.CreateRun(context.Background(), domain.Run{
+		ID: "run_busy", AgentID: "agt_busy", Status: domain.RunRunning, MaxAttempts: 1,
+	}, ""); err != nil {
+		t.Fatal(err)
+	}
+	health := routerHealth{"agt_busy": agenthealth.StatusHealthy, "agt_free": agenthealth.StatusHealthy}
+	decision, err := NewWithLoad(discovery.New(repository, health), repository).Select(context.Background(), []string{"testing"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Agent.ID != "agt_free" || decision.ActiveRuns != 0 || decision.EffectiveCapacity != 2 {
+		t.Fatalf("expected free Agent, got %+v", decision)
+	}
+}
+
+func TestSelectUsesNormalizedLoadThenPriority(t *testing.T) {
+	repository := store.NewMemory()
+	now := time.Now().UTC()
+	for _, agent := range []domain.Agent{
+		{ID: "agt_half", Name: "Half", Capabilities: []string{"testing"}, MaxConcurrency: 2, Priority: 100, CreatedAt: now},
+		{ID: "agt_quarter", Name: "Quarter", Capabilities: []string{"testing"}, MaxConcurrency: 4, CreatedAt: now},
+	} {
+		if _, err := repository.CreateAgent(context.Background(), agent); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for index, agentID := range []string{"agt_half", "agt_quarter"} {
+		if _, _, err := repository.CreateRun(context.Background(), domain.Run{
+			ID: fmt.Sprintf("run_%d", index), AgentID: agentID, Status: domain.RunQueued, MaxAttempts: 1,
+		}, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	health := routerHealth{"agt_half": agenthealth.StatusHealthy, "agt_quarter": agenthealth.StatusHealthy}
+	router := NewWithLoad(discovery.New(repository, health), repository)
+	decision, err := router.Select(context.Background(), []string{"testing"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Agent.ID != "agt_quarter" {
+		t.Fatalf("lower utilization must win before priority: %+v", decision)
+	}
+
+	for _, runID := range []string{"run_0", "run_1"} {
+		completed, err := repository.GetRun(context.Background(), runID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		completed.Status = domain.RunSucceeded
+		if err := repository.UpdateRun(context.Background(), completed); err != nil {
+			t.Fatal(err)
+		}
+	}
+	decision, err = router.Select(context.Background(), []string{"testing"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Agent.ID != "agt_half" || decision.Priority != 100 {
+		t.Fatalf("priority must break equal-load ties: %+v", decision)
+	}
+}
+
+func TestSelectReturnsCapacityErrorWhenAllMatchesAreSaturated(t *testing.T) {
+	repository := store.NewMemory()
+	if _, err := repository.CreateAgent(context.Background(), domain.Agent{
+		ID: "agt_full", Name: "Full", Capabilities: []string{"testing"}, MaxConcurrency: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := repository.CreateRun(context.Background(), domain.Run{
+		ID: "run_full", AgentID: "agt_full", Status: domain.RunQueued, MaxAttempts: 1,
+	}, ""); err != nil {
+		t.Fatal(err)
+	}
+	health := routerHealth{"agt_full": agenthealth.StatusHealthy}
+	_, err := NewWithLoad(discovery.New(repository, health), repository).Select(context.Background(), []string{"testing"})
+	if !errors.Is(err, ErrNoCapacity) {
+		t.Fatalf("expected capacity error, got %v", err)
 	}
 }
 

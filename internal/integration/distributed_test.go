@@ -68,7 +68,8 @@ func TestDistributedRunLifecycleAndIdempotency(t *testing.T) {
 	}
 	configuredAgent := domain.Agent{
 		ID: "agt_configured_" + suffix, Name: "configured", Runtime: "remote", Protocol: "http",
-		Endpoint: "http://agent:9000", Capabilities: []string{"testing", "debugging"}, CreatedAt: time.Now().UTC(),
+		Endpoint: "http://agent:9000", Capabilities: []string{"testing", "debugging"},
+		MaxConcurrency: 4, Priority: 25, CreatedAt: time.Now().UTC(),
 	}
 	if _, err := repository.CreateAgent(ctx, configuredAgent); err != nil {
 		t.Fatal(err)
@@ -78,18 +79,22 @@ func TestDistributedRunLifecycleAndIdempotency(t *testing.T) {
 		t.Fatal(err)
 	}
 	if loadedAgent.Runtime != configuredAgent.Runtime || loadedAgent.Protocol != configuredAgent.Protocol ||
-		loadedAgent.Endpoint != configuredAgent.Endpoint || !slices.Equal(loadedAgent.Capabilities, configuredAgent.Capabilities) {
+		loadedAgent.Endpoint != configuredAgent.Endpoint || !slices.Equal(loadedAgent.Capabilities, configuredAgent.Capabilities) ||
+		loadedAgent.MaxConcurrency != 4 || loadedAgent.Priority != 25 {
 		t.Fatalf("agent execution metadata was not persisted: got=%+v want=%+v", loadedAgent, configuredAgent)
 	}
 	configuredAgent.Name = "configured-updated"
 	configuredAgent.Endpoint = "http://agent:9001"
 	configuredAgent.Capabilities = []string{"testing", "observability"}
+	configuredAgent.MaxConcurrency = 8
+	configuredAgent.Priority = 50
 	updatedAgent, err := repository.UpdateAgent(ctx, configuredAgent, loadedAgent.Version)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if updatedAgent.Version != loadedAgent.Version+1 || !updatedAgent.CreatedAt.Equal(loadedAgent.CreatedAt) ||
-		updatedAgent.Endpoint != configuredAgent.Endpoint || !slices.Equal(updatedAgent.Capabilities, configuredAgent.Capabilities) {
+		updatedAgent.Endpoint != configuredAgent.Endpoint || !slices.Equal(updatedAgent.Capabilities, configuredAgent.Capabilities) ||
+		updatedAgent.MaxConcurrency != 8 || updatedAgent.Priority != 50 {
 		t.Fatalf("PostgreSQL Agent update was not persisted: %+v", updatedAgent)
 	}
 	if _, err := repository.UpdateAgent(ctx, configuredAgent, loadedAgent.Version); !errors.Is(err, store.ErrConflict) {
@@ -176,6 +181,13 @@ func TestDistributedRunLifecycleAndIdempotency(t *testing.T) {
 	}
 	if _, _, err := repository.CreateRun(ctx, cancelCandidate, ""); err != nil {
 		t.Fatal(err)
+	}
+	activeCounts, err := repository.CountActiveRunsByAgent(ctx, []string{agent.ID, configuredAgent.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if activeCounts[agent.ID] < 1 || activeCounts[configuredAgent.ID] != 0 {
+		t.Fatalf("unexpected PostgreSQL active Run counts: %#v", activeCounts)
 	}
 	canceled, err := repository.CancelRun(ctx, cancelCandidate.ID, time.Now())
 	if err != nil || canceled.Status != domain.RunCanceled || !slices.Equal(canceled.RequiredCapabilities, cancelCandidate.RequiredCapabilities) {

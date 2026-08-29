@@ -46,6 +46,7 @@
 - [x] Versioned Agent update/delete with dependency protection
 - [x] Normalized capabilities and exact Agent discovery filters
 - [x] Deterministic capability Router V1 with health-aware fallback
+- [x] Load-aware Router ranking with declared capacity and priority
 - [ ] Authentication
 - [ ] RBAC
 - [ ] Audit log

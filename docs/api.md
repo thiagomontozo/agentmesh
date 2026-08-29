@@ -37,13 +37,17 @@ curl -X POST http://localhost:8080/api/v1/agents \
     "runtime":"remote",
     "protocol":"http",
     "endpoint":"http://legal-agent:9000",
-    "capabilities":["legal-search","legal-analysis","summarization"]
+    "capabilities":["legal-search","legal-analysis","summarization"],
+    "max_concurrency":8,
+    "priority":25
   }'
 ```
 
 `runtime` and `protocol` are extensible lowercase identifiers. For remote HTTP execution, use `runtime: "remote"` and `protocol: "http"`; `endpoint` is an HTTP or HTTPS base URL and AgentMesh calls its `/v1/runs` path using [Agent Protocol V1](agent-protocol-v1.md).
 
 Capabilities are normalized identifier keys: case is folded to lowercase, spaces/underscores become hyphens, repeated separators collapse, and duplicates are removed while preserving declaration order. For example, `"Legal Analysis"`, `"legal_analysis"`, and `"legal-analysis"` all become `"legal-analysis"`. They remain declared metadata rather than an automatic routing decision.
+
+`max_concurrency` is an optional routing capacity declaration. Zero means unspecified and has an effective Router capacity of one; positive values declare the maximum number of queued/running Runs the Router should assign. `priority` ranges from `-1000` to `1000`, defaults to zero, and only breaks equal-utilization ties. Neither field blocks Runs submitted through explicit `agent_id`.
 
 Agent responses include `version`, `created_at`, `updated_at`, and a strong numeric `ETag`. Updates are full replacements and require the current ETag:
 
@@ -117,9 +121,9 @@ curl -i -X POST http://localhost:8080/api/v1/runs \
   }'
 ```
 
-`agent_id` and `required_capabilities` are mutually exclusive. The router requires every declared capability, excludes `unhealthy` Agents, prefers `healthy` Agents, and explicitly falls back to `unknown`. Within either tier, the oldest `created_at` wins and Agent ID breaks ties. No match returns `422 Unprocessable Entity`. The selected `agent_id` and normalized `required_capabilities` are persisted on the Run, so idempotency replay retains the original decision even if health later changes.
+`agent_id` and `required_capabilities` are mutually exclusive. The router requires every declared capability, excludes `unhealthy` Agents, prefers `healthy` Agents, and explicitly falls back to `unknown`. Within a health tier it excludes Agents at effective capacity, chooses the lowest `active_runs / effective_capacity`, then higher `priority`, more remaining slots, oldest `created_at`, and Agent ID. No capability match returns `422 Unprocessable Entity`; matches that are all saturated return `429 Too Many Requests`. The selected `agent_id` and normalized `required_capabilities` are persisted on the Run, so idempotency replay is checked before routing and retains the original decision even if health or load later changes.
 
-The router does not infer requirements from `input`, use an LLM, balance by load, or replace direct `agent_id` selection.
+The router does not infer requirements from `input`, use an LLM, or replace direct `agent_id` selection.
 
 Run status progresses through `queued`, `running`, and a terminal state: `succeeded`, `failed`, or `canceled`. The response includes `request_id`, `attempt`, `max_attempts`, lifecycle timestamps, and `duration_ms`. Duration is explicit after a terminal transition and measures execution time from `started_at`, or total queued lifetime if execution never started.
 

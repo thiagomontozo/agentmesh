@@ -38,11 +38,13 @@ type AgentRepository interface {
 type RunRepository interface {
 	CreateRun(ctx context.Context, run domain.Run, idempotencyKey string) (created domain.Run, isNew bool, err error)
 	GetRun(ctx context.Context, id string) (domain.Run, error)
+	GetRunByIdempotencyKey(ctx context.Context, key string) (domain.Run, error)
 	UpdateRun(ctx context.Context, run domain.Run) error
 	ClaimRunExecution(ctx context.Context, id string, minimumFence int64) (int64, error)
 	UpdateRunFenced(ctx context.Context, run domain.Run, fence int64) error
 	CancelRun(ctx context.Context, id string, at time.Time) (domain.Run, error)
 	ListRuns(ctx context.Context) ([]domain.Run, error)
+	CountActiveRunsByAgent(ctx context.Context, agentIDs []string) (map[string]int, error)
 	ListPendingRuns(ctx context.Context) ([]PendingRun, error)
 	RecoverRun(ctx context.Context, id string, minimumFence int64) (bool, error)
 }

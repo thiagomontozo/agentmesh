@@ -46,7 +46,7 @@ func NewWithInstanceID(s store.Repository, e *engine.Engine, bus events.Broker, 
 		agentHealth: agenthealth.Noop{},
 	}
 	server.discovery = discovery.New(s, server.agentHealth)
-	server.agentRouter = agentrouter.New(server.discovery)
+	server.agentRouter = agentrouter.NewWithLoad(server.discovery, s)
 	server.routes()
 	return server
 }
@@ -55,7 +55,7 @@ func (s *Server) SetAgentHealth(registry agenthealth.Registry) {
 	if registry != nil {
 		s.agentHealth = registry
 		s.discovery = discovery.New(s.store, registry)
-		s.agentRouter = agentrouter.New(s.discovery)
+		s.agentRouter = agentrouter.NewWithLoad(s.discovery, s.store)
 	}
 }
 
@@ -98,12 +98,14 @@ func (s *Server) ready(w http.ResponseWriter, r *http.Request) {
 }
 
 type createAgentRequest struct {
-	Name         string   `json:"name"`
-	SystemPrompt string   `json:"system_prompt"`
-	Runtime      string   `json:"runtime"`
-	Protocol     string   `json:"protocol"`
-	Endpoint     string   `json:"endpoint"`
-	Capabilities []string `json:"capabilities"`
+	Name           string   `json:"name"`
+	SystemPrompt   string   `json:"system_prompt"`
+	Runtime        string   `json:"runtime"`
+	Protocol       string   `json:"protocol"`
+	Endpoint       string   `json:"endpoint"`
+	Capabilities   []string `json:"capabilities"`
+	MaxConcurrency int      `json:"max_concurrency"`
+	Priority       int      `json:"priority"`
 }
 
 func (s *Server) createAgent(w http.ResponseWriter, r *http.Request) {
@@ -114,14 +116,16 @@ func (s *Server) createAgent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	agent := domain.Agent{
-		ID:           newID("agt"),
-		Name:         request.Name,
-		SystemPrompt: request.SystemPrompt,
-		Runtime:      request.Runtime,
-		Protocol:     request.Protocol,
-		Endpoint:     request.Endpoint,
-		Capabilities: request.Capabilities,
-		CreatedAt:    time.Now().UTC(),
+		ID:             newID("agt"),
+		Name:           request.Name,
+		SystemPrompt:   request.SystemPrompt,
+		Runtime:        request.Runtime,
+		Protocol:       request.Protocol,
+		Endpoint:       request.Endpoint,
+		Capabilities:   request.Capabilities,
+		MaxConcurrency: request.MaxConcurrency,
+		Priority:       request.Priority,
+		CreatedAt:      time.Now().UTC(),
 	}
 	if err := agent.NormalizeAndValidate(); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -246,7 +250,9 @@ func (s *Server) updateAgent(w http.ResponseWriter, r *http.Request) {
 	agent := domain.Agent{
 		ID: id, Name: request.Name, SystemPrompt: request.SystemPrompt,
 		Runtime: request.Runtime, Protocol: request.Protocol, Endpoint: request.Endpoint,
-		Capabilities: request.Capabilities,
+		Capabilities:   request.Capabilities,
+		MaxConcurrency: request.MaxConcurrency,
+		Priority:       request.Priority,
 	}
 	if err := agent.NormalizeAndValidate(); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -361,6 +367,30 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 	}
 	routed := request.AgentID == ""
 	if routed {
+		normalized, err := agentrouter.NormalizeRequirements(request.RequiredCapabilities)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		request.RequiredCapabilities = normalized
+	}
+	idempotencyKey := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
+	if len(idempotencyKey) > 128 {
+		writeError(w, http.StatusBadRequest, "Idempotency-Key must be at most 128 characters")
+		return
+	}
+	if idempotencyKey != "" {
+		existing, err := s.store.GetRunByIdempotencyKey(r.Context(), idempotencyKey)
+		if err == nil {
+			s.writeRunReplay(w, r, existing, request, routed)
+			return
+		}
+		if !errors.Is(err, store.ErrNotFound) {
+			writeError(w, http.StatusInternalServerError, "could not check idempotency key")
+			return
+		}
+	}
+	if routed {
 		decision, err := s.agentRouter.Select(r.Context(), request.RequiredCapabilities)
 		if errors.Is(err, agentrouter.ErrInvalidRequirements) {
 			writeError(w, http.StatusBadRequest, err.Error())
@@ -368,6 +398,10 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 		}
 		if errors.Is(err, agentrouter.ErrNoCandidate) {
 			writeError(w, http.StatusUnprocessableEntity, err.Error())
+			return
+		}
+		if errors.Is(err, agentrouter.ErrNoCapacity) {
+			writeError(w, http.StatusTooManyRequests, err.Error())
 			return
 		}
 		if err != nil {
@@ -383,12 +417,6 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not load agent")
 		return
 	}
-	idempotencyKey := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
-	if len(idempotencyKey) > 128 {
-		writeError(w, http.StatusBadRequest, "Idempotency-Key must be at most 128 characters")
-		return
-	}
-
 	run := domain.Run{
 		ID:                   newID("run"),
 		AgentID:              request.AgentID,
@@ -405,19 +433,7 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !isNew {
-		requestChanged := createdRun.Input != request.Input ||
-			!slices.Equal(createdRun.RequiredCapabilities, request.RequiredCapabilities)
-		if !routed {
-			requestChanged = requestChanged || createdRun.AgentID != request.AgentID
-		}
-		if requestChanged {
-			writeError(w, http.StatusConflict, "Idempotency-Key was already used with a different request")
-			return
-		}
-		w.Header().Set("Idempotency-Replayed", "true")
-		attributes := append(observability.ContextAttrs(r.Context()), "run_id", createdRun.ID, "agent_id", createdRun.AgentID)
-		slog.InfoContext(r.Context(), "run submission replayed", attributes...)
-		writeJSON(w, http.StatusOK, createdRun)
+		s.writeRunReplay(w, r, createdRun, request, routed)
 		return
 	}
 	run = createdRun
@@ -444,6 +460,22 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusAccepted, run)
+}
+
+func (s *Server) writeRunReplay(w http.ResponseWriter, r *http.Request, existing domain.Run, request createRunRequest, routed bool) {
+	requestChanged := existing.Input != request.Input ||
+		!slices.Equal(existing.RequiredCapabilities, request.RequiredCapabilities)
+	if !routed {
+		requestChanged = requestChanged || existing.AgentID != request.AgentID
+	}
+	if requestChanged {
+		writeError(w, http.StatusConflict, "Idempotency-Key was already used with a different request")
+		return
+	}
+	w.Header().Set("Idempotency-Replayed", "true")
+	attributes := append(observability.ContextAttrs(r.Context()), "run_id", existing.ID, "agent_id", existing.AgentID)
+	slog.InfoContext(r.Context(), "run submission replayed", attributes...)
+	writeJSON(w, http.StatusOK, existing)
 }
 
 func (s *Server) listRuns(w http.ResponseWriter, r *http.Request) {

@@ -68,6 +68,10 @@ A newer lease owner claimed the Run before this worker attempted to persist stat
 
 This is intentional while its execution lease remains owned. Startup recovery no longer resets every `running` row. The new replica skips a healthy owner's Run; after the lease expires, a recovery pass can acquire ownership, advance the fence, and requeue it. Check Redis TTL/renewal state when an actually abandoned Run remains `running` longer than `AGENTMESH_LEASE_TTL`.
 
+## Capability routing returns 429
+
+At least one healthy/unknown Agent matched every requested capability, but all matches had queued/running counts at or above their effective `max_concurrency`. Wait for a Run to reach a terminal state, increase the Agent's declared capacity using its ETag, add another equivalent Agent, or submit an explicit `agent_id` if deliberately bypassing advisory routing capacity. Reusing an existing `Idempotency-Key` replays before this capacity check.
+
 ## An SSE client receives duplicate events after reconnecting
 
 Distributed event history survives restart in PostgreSQL and every event has a stable `event_id`. AgentMesh currently replays the configured bounded history rather than applying the request's `Last-Event-ID`. Deduplicate by `event_id`, and query `GET /api/v1/runs/{id}` for authoritative final state. Native `Last-Event-ID` filtering remains pending.

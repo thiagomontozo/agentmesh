@@ -113,11 +113,15 @@ The public Agent listing exposes those filters with optional `limit`/`offset` pa
 
 ## Deterministic Agent Router V1
 
-`internal/router.Router` reuses discovery when Run submission supplies normalized `required_capabilities` instead of an explicit `agent_id`. It requires an Agent to declare every capability, excludes `unhealthy`, prefers `healthy`, and uses `unknown` as an explicit fallback. Discovery order—oldest `created_at`, then Agent ID—is the stable tie-breaker within a health tier. Each decision is emitted as a structured log with the selected Agent, requirements, health tier, strategy, and candidate count.
+`internal/router.Router` reuses discovery when Run submission supplies normalized `required_capabilities` instead of an explicit `agent_id`. It requires an Agent to declare every capability, excludes `unhealthy`, prefers `healthy`, and uses `unknown` as an explicit fallback.
+
+The load-aware rank reads one aggregate snapshot of queued/running Runs for the matching Agent IDs. An Agent at effective capacity is excluded. Remaining candidates are ordered by normalized utilization (`active / capacity`), descending priority, remaining slots, creation time, then Agent ID. A missing `max_concurrency` has effective capacity one for routing compatibility. Decision logs add active count, effective capacity, and priority.
 
 The API still supports direct `agent_id`, and rejects requests that mix the two selection modes. The Run persists both the chosen Agent ID and routing requirements. This makes the decision auditable and allows an idempotency replay to return its original selection rather than rerouting after a health change.
 
-V1 is intentionally deterministic and declared-input-only: it does not inspect natural-language input, use LLMs or embeddings, balance by load, rank semantically, or discover capabilities implicitly. Health remains replica-local, so replicas can make different decisions while their probe state converges; the persisted Run and idempotency contract remain authoritative after creation.
+The capacity check is advisory rather than an atomic reservation: simultaneous replicas can observe the same snapshot and choose the same Agent. Explicit `agent_id` also bypasses capacity. Enforcing a hard distributed concurrency quota would require an atomic reservation/lease and is outside this increment.
+
+The Router remains deterministic and declared-input-only: it does not inspect natural-language input, use LLMs or embeddings, or discover capabilities implicitly. Health remains replica-local, so replicas can make different decisions while their probe state converges; the persisted Run and idempotency contract remain authoritative after creation. Idempotency lookup occurs before routing so a saturated original Agent cannot block replay.
 
 ## Agent Registry lifecycle
 
