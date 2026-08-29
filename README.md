@@ -75,6 +75,7 @@ The Engine resolves the already-selected Agent's runtime through a concurrency-s
 - Monotonic fencing tokens for stale-worker write protection
 - Lease-aware multi-replica recovery for abandoned Runs
 - Cross-replica Run events and SSE through NATS pub/sub
+- Bounded PostgreSQL event history with stable SSE event IDs and restart replay
 - Restart recovery for queued/running work
 
 ## API
@@ -153,6 +154,8 @@ With the server running in one terminal:
 | `AGENTMESH_NATS_ACK_WAIT` | `2m` | JetStream acknowledgement timeout |
 | `AGENTMESH_CACHE_TTL` | `30s` | Redis cache lifetime |
 | `AGENTMESH_LEASE_TTL` | `5m` | Distributed per-run execution lease |
+| `AGENTMESH_EVENT_RETENTION` | `168h` | Maximum age of persisted Run events |
+| `AGENTMESH_EVENT_HISTORY_LIMIT` | `1000` | Maximum persisted/replayed events per Run |
 
 ## Test
 
@@ -183,7 +186,7 @@ internal/domain/        core domain models
 internal/engine/        queue, workers and executor abstraction
 internal/runtime/       runtime request/result contract and legacy adapter
 internal/protocol/v1/   language-neutral Agent Protocol V1 wire types
-internal/events/        bounded local bus + distributed NATS pub/sub
+internal/events/        local/NATS event broker + persistent replay
 internal/httpapi/       REST + SSE transport
 internal/queue/         memory and NATS JetStream queues
 internal/cache/         Redis cache adapter

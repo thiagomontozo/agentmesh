@@ -351,6 +351,80 @@ func (r *Repository) RecoverRun(ctx context.Context, id string, minimumFence int
 	return false, nil
 }
 
+func (r *Repository) AppendRunEvent(
+	ctx context.Context,
+	event domain.RunEvent,
+	retention time.Duration,
+	maxPerRun int,
+) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin run event append: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO run_events (event_id, run_id, type, message, attempt, timestamp)
+		VALUES ($1, $2, $3, $4, $5, $6)
+		ON CONFLICT (event_id) DO NOTHING`,
+		event.ID, event.RunID, event.Type, event.Message, event.Attempt, event.Timestamp,
+	); err != nil {
+		return fmt.Errorf("insert run event: %w", err)
+	}
+	if maxPerRun > 0 {
+		if _, err := tx.Exec(ctx, `
+			DELETE FROM run_events
+			WHERE run_id = $1 AND sequence < COALESCE((
+				SELECT sequence FROM run_events
+				WHERE run_id = $1
+				ORDER BY sequence DESC
+				OFFSET $2 LIMIT 1
+			), 0)`, event.RunID, maxPerRun-1); err != nil {
+			return fmt.Errorf("limit run event history: %w", err)
+		}
+	}
+	if retention > 0 {
+		if _, err := tx.Exec(ctx, "DELETE FROM run_events WHERE timestamp < $1", time.Now().UTC().Add(-retention)); err != nil {
+			return fmt.Errorf("retain run event history: %w", err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit run event append: %w", err)
+	}
+	return nil
+}
+
+func (r *Repository) ListRunEvents(ctx context.Context, runID string, limit int) ([]domain.RunEvent, error) {
+	if limit <= 0 {
+		limit = 1000
+	}
+	rows, err := r.pool.Query(ctx, `
+		SELECT event_id, run_id, type, message, attempt, timestamp
+		FROM (
+			SELECT sequence, event_id, run_id, type, message, attempt, timestamp
+			FROM run_events
+			WHERE run_id = $1
+			ORDER BY sequence DESC
+			LIMIT $2
+		) recent
+		ORDER BY sequence`, runID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list run events: %w", err)
+	}
+	defer rows.Close()
+	events := make([]domain.RunEvent, 0)
+	for rows.Next() {
+		var event domain.RunEvent
+		if err := rows.Scan(&event.ID, &event.RunID, &event.Type, &event.Message, &event.Attempt, &event.Timestamp); err != nil {
+			return nil, fmt.Errorf("scan run event: %w", err)
+		}
+		events = append(events, event)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list run events: %w", err)
+	}
+	return events, nil
+}
+
 func (r *Repository) Ping(ctx context.Context) error {
 	if err := r.pool.Ping(ctx); err != nil {
 		return fmt.Errorf("ping PostgreSQL: %w", err)

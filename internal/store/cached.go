@@ -134,6 +134,14 @@ func (c *Cached) RecoverRun(ctx context.Context, id string, minimumFence int64) 
 	return recovered, nil
 }
 
+func (c *Cached) AppendRunEvent(ctx context.Context, event domain.RunEvent, retention time.Duration, maxPerRun int) error {
+	return c.inner.AppendRunEvent(ctx, event, retention, maxPerRun)
+}
+
+func (c *Cached) ListRunEvents(ctx context.Context, runID string, limit int) ([]domain.RunEvent, error) {
+	return c.inner.ListRunEvents(ctx, runID, limit)
+}
+
 func (c *Cached) Ping(ctx context.Context) error {
 	if err := c.inner.Ping(ctx); err != nil {
 		return err

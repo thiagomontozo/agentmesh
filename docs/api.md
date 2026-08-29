@@ -94,7 +94,9 @@ Typical event names are:
 - `run.failed`
 - `run.canceled`
 
-The stream closes after a terminal event. In distributed mode, NATS pub/sub makes live events visible on every API replica, so SSE does not require sticky routing to the worker. Each replica keeps a bounded local history for late subscribers, but that history is not durable and cannot replay events missed while the replica was disconnected. PostgreSQL remains the source of truth for final Run state.
+The stream closes after a terminal event. Every frame contains an SSE `id:` and its JSON body contains the same `event_id`, plus `run_id`, `type`, `message`, `attempt`, and `timestamp`.
+
+In distributed mode, NATS pub/sub makes live events visible on every API replica, while PostgreSQL provides ordered replay across reconnects and restarts. Replay is bounded by `AGENTMESH_EVENT_HISTORY_LIMIT` and `AGENTMESH_EVENT_RETENTION`. AgentMesh does not yet filter replay from an incoming `Last-Event-ID`, so reconnecting clients should deduplicate by `event_id`. PostgreSQL Run state remains authoritative.
 
 ## Request validation
 

@@ -97,8 +97,10 @@ func (r *Run) Cancel(at time.Time) error {
 }
 
 type RunEvent struct {
+	ID        string    `json:"event_id"`
 	RunID     string    `json:"run_id"`
 	Type      string    `json:"type"`
 	Message   string    `json:"message"`
+	Attempt   int       `json:"attempt,omitempty"`
 	Timestamp time.Time `json:"timestamp"`
 }

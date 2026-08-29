@@ -41,6 +41,8 @@ The API is available at `http://localhost:8080`. PostgreSQL migrations run autom
 | `AGENTMESH_NATS_ACK_WAIT` | `2m` | JetStream acknowledgement window; keep above the maximum expected execution time |
 | `AGENTMESH_CACHE_TTL` | `30s` | Redis TTL for agents and runs; must be positive |
 | `AGENTMESH_LEASE_TTL` | `5m` | Per-run execution lease; renewed every third of the TTL and must be positive |
+| `AGENTMESH_EVENT_RETENTION` | `168h` | Maximum age of persisted Run events; must be positive |
+| `AGENTMESH_EVENT_HISTORY_LIMIT` | `1000` | Maximum persisted/replayed events per Run; must be at least 1 |
 | `AGENTMESH_DATABASE_URL` | none | Required in distributed mode |
 | `AGENTMESH_NATS_URL` | none | Required in distributed mode |
 | `AGENTMESH_REDIS_URL` | none | Required in distributed mode |
@@ -96,4 +98,5 @@ Runs interrupted by process shutdown remain recoverable. On startup, queued work
 - Runtimes must honor context cancellation; AgentMesh does not detach runtime calls into goroutines to force-stop implementations that ignore context.
 - Back up PostgreSQL and the JetStream storage directory.
 - Distributed SSE uses NATS pub/sub across replicas. Keep NATS available; publish failures are logged and only the publisher's local subscribers see the affected event.
-- Event history is bounded per replica and is not durable yet. Clients must query the Run resource for authoritative final state after reconnecting.
+- Run event history is persisted in PostgreSQL and bounded by both age and count. SSE reconnects replay that bounded history; clients should still query the Run resource for authoritative final state.
+- `Last-Event-ID` filtering is not consumed yet. Clients may receive already processed events after reconnecting and should deduplicate by `event_id`.

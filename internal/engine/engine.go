@@ -189,7 +189,7 @@ func (e *Engine) Cancel(ctx context.Context, runID string) (domain.Run, error) {
 	if cancelExecution != nil {
 		cancelExecution()
 	}
-	e.publish(run.ID, "run.canceled", "run canceled")
+	e.publish(run.ID, "run.canceled", "run canceled", run.Attempt)
 	return run, nil
 }
 
@@ -312,7 +312,7 @@ func (e *Engine) execute(ctx context.Context, runID string) error {
 		run.MaxAttempts = e.retry.MaxAttempts
 	}
 	for {
-		if renewalErr := e.leaseRenewalError(run.ID, keeper); renewalErr != nil {
+		if renewalErr := e.leaseRenewalError(run.ID, run.Attempt, keeper); renewalErr != nil {
 			return renewalErr
 		}
 		if runCtx.Err() != nil {
@@ -332,7 +332,7 @@ func (e *Engine) execute(ctx context.Context, runID string) error {
 			}
 			return fmt.Errorf("persist run attempt: %w", err)
 		}
-		e.publish(run.ID, "run.started", fmt.Sprintf("attempt %d of %d started", run.Attempt, run.MaxAttempts))
+		e.publish(run.ID, "run.started", fmt.Sprintf("attempt %d of %d started", run.Attempt, run.MaxAttempts), run.Attempt)
 
 		attemptCtx, cancelAttempt := context.WithTimeout(runCtx, e.retry.AttemptTimeout)
 		result, executeErr := executeRuntimeSafely(attemptCtx, implementation, agentruntime.ExecutionRequest{
@@ -340,7 +340,7 @@ func (e *Engine) execute(ctx context.Context, runID string) error {
 		})
 		attemptContextErr := attemptCtx.Err()
 		cancelAttempt()
-		if renewalErr := e.leaseRenewalError(run.ID, keeper); renewalErr != nil {
+		if renewalErr := e.leaseRenewalError(run.ID, run.Attempt, keeper); renewalErr != nil {
 			return renewalErr
 		}
 		if ctx.Err() != nil {
@@ -351,7 +351,7 @@ func (e *Engine) execute(ctx context.Context, runID string) error {
 		}
 		if errors.Is(attemptContextErr, context.DeadlineExceeded) && !errors.Is(executeErr, ErrRuntimePanic) {
 			executeErr = fmt.Errorf("%w: attempt %d exceeded %s", ErrAttemptTimeout, run.Attempt, e.retry.AttemptTimeout)
-			e.publish(run.ID, "run.attempt_timed_out", executeErr.Error())
+			e.publish(run.ID, "run.attempt_timed_out", executeErr.Error(), run.Attempt)
 		}
 		if executeErr == nil {
 			if err := run.Succeed(result.Output, time.Now()); err != nil {
@@ -363,7 +363,7 @@ func (e *Engine) execute(ctx context.Context, runID string) error {
 				}
 				return fmt.Errorf("persist completed run: %w", err)
 			}
-			e.publish(run.ID, "run.succeeded", "run completed successfully")
+			e.publish(run.ID, "run.succeeded", "run completed successfully", run.Attempt)
 			return nil
 		}
 		if run.Attempt >= run.MaxAttempts {
@@ -371,12 +371,12 @@ func (e *Engine) execute(ctx context.Context, runID string) error {
 		}
 
 		backoff := e.backoff(run.Attempt)
-		e.publish(run.ID, "run.retrying", fmt.Sprintf("attempt %d failed; retrying in %s: %v", run.Attempt, backoff, executeErr))
+		e.publish(run.ID, "run.retrying", fmt.Sprintf("attempt %d failed; retrying in %s: %v", run.Attempt, backoff, executeErr), run.Attempt)
 		retryTimer := time.NewTimer(backoff)
 		select {
 		case <-runCtx.Done():
 			retryTimer.Stop()
-			if renewalErr := e.leaseRenewalError(run.ID, keeper); renewalErr != nil {
+			if renewalErr := e.leaseRenewalError(run.ID, run.Attempt, keeper); renewalErr != nil {
 				return renewalErr
 			}
 			if ctx.Err() != nil {
@@ -394,12 +394,12 @@ func releaseLease(lease coordination.Lease) error {
 	return lease.Release(releaseCtx)
 }
 
-func (e *Engine) leaseRenewalError(runID string, keeper *leaseKeeper) error {
+func (e *Engine) leaseRenewalError(runID string, attempt int, keeper *leaseKeeper) error {
 	err := keeper.Err()
 	if err == nil {
 		return nil
 	}
-	e.publish(runID, "run.lease_lost", err.Error())
+	e.publish(runID, "run.lease_lost", err.Error(), attempt)
 	return err
 }
 
@@ -430,7 +430,7 @@ func (e *Engine) failRun(ctx context.Context, run domain.Run, executionFence int
 		}
 		return fmt.Errorf("persist failed run: %w", updateErr)
 	}
-	e.publish(run.ID, "run.failed", err.Error())
+	e.publish(run.ID, "run.failed", err.Error(), run.Attempt)
 	if deadLetterErr := e.queue.DeadLetter(ctx, run.ID, err); deadLetterErr != nil {
 		return fmt.Errorf("dead-letter run: %w", deadLetterErr)
 	}
@@ -451,11 +451,12 @@ func (e *Engine) backoff(attempt int) time.Duration {
 	return backoff
 }
 
-func (e *Engine) publish(runID, eventType, message string) {
+func (e *Engine) publish(runID, eventType, message string, attempt int) {
 	e.events.Publish(domain.RunEvent{
 		RunID:     runID,
 		Type:      eventType,
 		Message:   message,
+		Attempt:   attempt,
 		Timestamp: time.Now().UTC(),
 	})
 }

@@ -1,6 +1,7 @@
 package events
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/nats-io/nats.go"
 	"github.com/thiagomontozo/agentmesh/internal/domain"
+	"github.com/thiagomontozo/agentmesh/internal/store"
 )
 
 const runEventsSubject = "agentmesh.events.runs"
@@ -16,11 +18,31 @@ const runEventsSubject = "agentmesh.events.runs"
 type NATS struct {
 	conn      *nats.Conn
 	local     *Bus
+	history   store.EventRepository
+	retention time.Duration
+	limit     int
 	closeOnce sync.Once
 	closeErr  error
 }
 
 func NewNATS(url string) (*NATS, error) {
+	return newNATS(url, nil, 0, 128)
+}
+
+func NewPersistentNATS(url string, history store.EventRepository, retention time.Duration, limit int) (*NATS, error) {
+	if history == nil {
+		return nil, fmt.Errorf("persistent event history repository is required")
+	}
+	if retention <= 0 {
+		return nil, fmt.Errorf("event history retention must be positive")
+	}
+	if limit < 1 {
+		return nil, fmt.Errorf("event history limit must be positive")
+	}
+	return newNATS(url, history, retention, limit)
+}
+
+func newNATS(url string, history store.EventRepository, retention time.Duration, limit int) (*NATS, error) {
 	conn, err := nats.Connect(
 		url,
 		nats.Name("agentmesh-events"),
@@ -32,7 +54,7 @@ func NewNATS(url string) (*NATS, error) {
 	if err != nil {
 		return nil, fmt.Errorf("connect NATS event bus: %w", err)
 	}
-	bus := &NATS{conn: conn, local: NewBus()}
+	bus := &NATS{conn: conn, local: NewBusWithHistoryLimit(limit), history: history, retention: retention, limit: limit}
 	if _, err := conn.Subscribe(runEventsSubject, bus.receive); err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("subscribe NATS event bus: %w", err)
@@ -45,6 +67,15 @@ func NewNATS(url string) (*NATS, error) {
 }
 
 func (b *NATS) Publish(event domain.RunEvent) {
+	event = prepare(event)
+	if b.history != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		err := b.history.AppendRunEvent(ctx, event, b.retention, b.limit)
+		cancel()
+		if err != nil {
+			slog.Error("run event persistence failed", "event_id", event.ID, "run_id", event.RunID, "type", event.Type, "error", err)
+		}
+	}
 	b.local.Publish(event)
 	payload, err := json.Marshal(event)
 	if err != nil {
@@ -57,6 +88,15 @@ func (b *NATS) Publish(event domain.RunEvent) {
 }
 
 func (b *NATS) Subscribe(runID string) (<-chan domain.RunEvent, func()) {
+	if b.history != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		persisted, err := b.history.ListRunEvents(ctx, runID, b.limit)
+		cancel()
+		if err == nil {
+			return b.local.SubscribeWithHistory(runID, persisted)
+		}
+		slog.Error("run event replay failed", "run_id", runID, "error", err)
+	}
 	return b.local.Subscribe(runID)
 }
 

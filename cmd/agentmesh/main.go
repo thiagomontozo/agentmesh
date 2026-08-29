@@ -64,7 +64,9 @@ func main() {
 		runQueue = natsQueue
 		coordinator = redisCache
 
-		natsEvents, err := events.NewNATS(cfg.NATSURL)
+		natsEvents, err := events.NewPersistentNATS(
+			cfg.NATSURL, repository, cfg.EventRetention, cfg.EventHistoryLimit,
+		)
 		if err != nil {
 			slog.Error("distributed event bus initialization failed", "error", err)
 			os.Exit(1)
