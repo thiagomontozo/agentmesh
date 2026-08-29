@@ -166,25 +166,41 @@ func (m *Memory) ListRuns(_ context.Context) ([]domain.Run, error) {
 	return result, nil
 }
 
-func (m *Memory) RecoverPendingRuns(_ context.Context) ([]string, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	result := make([]string, 0)
+func (m *Memory) ListPendingRuns(_ context.Context) ([]PendingRun, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	result := make([]PendingRun, 0)
 	for id, run := range m.runs {
-		if run.Status == domain.RunRunning {
-			run.Status = domain.RunQueued
-			run.StartedAt = nil
-			if run.Attempt > 0 {
-				run.Attempt--
-			}
-			m.runs[id] = run
-		}
-		if run.Status == domain.RunQueued {
-			result = append(result, id)
+		if run.Status == domain.RunQueued || run.Status == domain.RunRunning {
+			result = append(result, PendingRun{ID: id, Status: run.Status})
 		}
 	}
-	sort.Strings(result)
+	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
 	return result, nil
+}
+
+func (m *Memory) RecoverRun(_ context.Context, id string, minimumFence int64) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	run, ok := m.runs[id]
+	if !ok {
+		return false, ErrNotFound
+	}
+	if run.Status != domain.RunRunning {
+		return false, nil
+	}
+	nextFence := m.runFences[id] + 1
+	if minimumFence > nextFence {
+		nextFence = minimumFence
+	}
+	m.runFences[id] = nextFence
+	run.Status = domain.RunQueued
+	run.StartedAt = nil
+	if run.Attempt > 0 {
+		run.Attempt--
+	}
+	m.runs[id] = run
+	return true, nil
 }
 
 func (m *Memory) Ping(context.Context) error {

@@ -449,13 +449,121 @@ func TestEngineLeavesRunningRunRecoverableWhenContextIsCanceled(t *testing.T) {
 	if run.Status != domain.RunRunning {
 		t.Fatalf("expected recoverable running run, got %+v", run)
 	}
-	ids, err := memory.RecoverPendingRuns(context.Background())
-	if err != nil || len(ids) != 1 || ids[0] != run.ID {
-		t.Fatalf("unexpected recovery result: ids=%v err=%v", ids, err)
+	recoveryEngine := New(
+		memory, events.NewBus(), DemoExecutor{}, queue.NewMemory(4), runEngine.coord, 1, testRetryPolicy(3),
+	)
+	if err := recoveryEngine.Recover(context.Background()); err != nil {
+		t.Fatalf("recover stopped Run: %v", err)
 	}
 	recovered, err := memory.GetRun(context.Background(), run.ID)
 	if err != nil || recovered.Status != domain.RunQueued || recovered.Attempt != 0 {
 		t.Fatalf("unexpected recovered run: run=%+v err=%v", recovered, err)
+	}
+}
+
+func TestRecoveryDoesNotRequeueRunOwnedByHealthyInstance(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var calls atomic.Int32
+	executor := executorFunc(func(context.Context, domain.Agent, string) (string, error) {
+		if calls.Add(1) == 1 {
+			close(started)
+		}
+		<-release
+		return "healthy owner", nil
+	})
+	memory := store.NewMemory()
+	coordinator := coordination.NewMemory()
+	policy := testRetryPolicy(1)
+	policy.LeaseTTL = 60 * time.Millisecond
+	instanceA := New(memory, events.NewBus(), executor, queue.NewMemory(4), coordinator, 1, policy)
+	instanceB := New(memory, events.NewBus(), executor, queue.NewMemory(4), coordinator, 1, policy)
+	ctx, cancel := context.WithCancel(context.Background())
+	instanceA.Start(ctx)
+	t.Cleanup(func() {
+		cancel()
+		instanceA.Stop()
+	})
+	createTestData(t, memory, 1)
+	if err := instanceA.Enqueue(ctx, "run_1"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for instance A")
+	}
+	time.Sleep(2 * policy.LeaseTTL)
+	if err := instanceB.Recover(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	run, err := memory.GetRun(context.Background(), "run_1")
+	if err != nil || run.Status != domain.RunRunning || run.Attempt != 1 {
+		t.Fatalf("instance B requeued healthy work: run=%+v err=%v", run, err)
+	}
+	close(release)
+	run = waitForStatus(t, memory, run.ID, domain.RunSucceeded)
+	if calls.Load() != 1 || run.Output != "healthy owner" {
+		t.Fatalf("healthy Run executed more than once: calls=%d run=%+v", calls.Load(), run)
+	}
+}
+
+func TestRecoveryRequeuesRunAfterCrashedInstanceLeaseExpires(t *testing.T) {
+	memory := store.NewMemory()
+	coordinator := coordination.NewMemory()
+	createTestData(t, memory, 2)
+	ctx := context.Background()
+	crashedLease, acquired, err := coordinator.Acquire(ctx, "run:run_1", 30*time.Millisecond)
+	if err != nil || !acquired {
+		t.Fatalf("instance A acquire: acquired=%v err=%v", acquired, err)
+	}
+	oldFence, err := memory.ClaimRunExecution(ctx, "run_1", crashedLease.FencingToken())
+	if err != nil {
+		t.Fatal(err)
+	}
+	running, err := memory.GetRun(ctx, "run_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := running.Start(time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := memory.UpdateRunFenced(ctx, running, oldFence); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(60 * time.Millisecond)
+
+	var calls atomic.Int32
+	instanceB := New(memory, events.NewBus(), executorFunc(func(context.Context, domain.Agent, string) (string, error) {
+		calls.Add(1)
+		return "recovered", nil
+	}), queue.NewMemory(4), coordinator, 1, testRetryPolicy(2))
+	if err := instanceB.Recover(ctx); err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := memory.GetRun(ctx, "run_1")
+	if err != nil || recovered.Status != domain.RunQueued || recovered.Attempt != 0 || recovered.StartedAt != nil {
+		t.Fatalf("instance B did not recover abandoned Run: run=%+v err=%v", recovered, err)
+	}
+	stale := running
+	if err := stale.Succeed("crashed owner", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := memory.UpdateRunFenced(ctx, stale, oldFence); !errors.Is(err, store.ErrStaleExecution) {
+		t.Fatalf("crashed instance was not fenced after recovery: %v", err)
+	}
+	if err := instanceB.Recover(ctx); err != nil {
+		t.Fatalf("idempotent recovery failed: %v", err)
+	}
+	engineCtx, stop := context.WithCancel(context.Background())
+	instanceB.Start(engineCtx)
+	t.Cleanup(func() {
+		stop()
+		instanceB.Stop()
+	})
+	completed := waitForStatus(t, memory, "run_1", domain.RunSucceeded)
+	if calls.Load() != 1 || completed.Output != "recovered" {
+		t.Fatalf("recovered Run execution mismatch: calls=%d run=%+v", calls.Load(), completed)
 	}
 }
 

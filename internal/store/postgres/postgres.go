@@ -309,38 +309,46 @@ func (r *Repository) ListRuns(ctx context.Context) ([]domain.Run, error) {
 	return result, rows.Err()
 }
 
-func (r *Repository) RecoverPendingRuns(ctx context.Context) ([]string, error) {
-	tx, err := r.pool.Begin(ctx)
+func (r *Repository) ListPendingRuns(ctx context.Context) ([]store.PendingRun, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT id, status FROM runs
+		WHERE status IN ('queued', 'running')
+		ORDER BY created_at, id`)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("list pending runs: %w", err)
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	if _, err := tx.Exec(ctx, `
-		UPDATE runs SET status = 'queued', started_at = NULL, attempt = GREATEST(attempt - 1, 0)
-		WHERE status = 'running'`); err != nil {
-		return nil, fmt.Errorf("reset running runs: %w", err)
-	}
-	rows, err := tx.Query(ctx, "SELECT id FROM runs WHERE status = 'queued' ORDER BY created_at, id")
-	if err != nil {
-		return nil, err
-	}
-	var result []string
+	defer rows.Close()
+	result := make([]store.PendingRun, 0)
 	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			rows.Close()
+		var pending store.PendingRun
+		if err := rows.Scan(&pending.ID, &pending.Status); err != nil {
 			return nil, err
 		}
-		result = append(result, id)
+		result = append(result, pending)
 	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return nil, err
+	return result, rows.Err()
+}
+
+func (r *Repository) RecoverRun(ctx context.Context, id string, minimumFence int64) (bool, error) {
+	command, err := r.pool.Exec(ctx, `
+		UPDATE runs
+		SET status = 'queued', started_at = NULL, attempt = GREATEST(attempt - 1, 0),
+			execution_fence = GREATEST(execution_fence + 1, $2)
+		WHERE id = $1 AND status = 'running'`, id, minimumFence)
+	if err != nil {
+		return false, fmt.Errorf("recover run: %w", err)
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return nil, err
+	if command.RowsAffected() == 1 {
+		return true, nil
 	}
-	return result, nil
+	var exists bool
+	if err := r.pool.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM runs WHERE id = $1)", id).Scan(&exists); err != nil {
+		return false, fmt.Errorf("check recovered run: %w", err)
+	}
+	if !exists {
+		return false, store.ErrNotFound
+	}
+	return false, nil
 }
 
 func (r *Repository) Ping(ctx context.Context) error {

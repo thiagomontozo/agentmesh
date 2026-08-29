@@ -51,3 +51,7 @@ The worker could not renew the execution lease or Redis reported that another to
 ## A worker reports `stale run execution fence`
 
 A newer lease owner claimed the Run before this worker attempted to persist state. The write was deliberately rejected; do not retry it with an unfenced repository update. Confirm whether a lease expired, Redis was unavailable, or duplicate workers used inconsistent coordination infrastructure. The current Run state belongs to the highest repository-issued fence.
+
+## A running Run is not requeued when another replica starts
+
+This is intentional while its execution lease remains owned. Startup recovery no longer resets every `running` row. The new replica skips a healthy owner's Run; after the lease expires, a recovery pass can acquire ownership, advance the fence, and requeue it. Check Redis TTL/renewal state when an actually abandoned Run remains `running` longer than `AGENTMESH_LEASE_TTL`.

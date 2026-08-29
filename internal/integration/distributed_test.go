@@ -175,6 +175,47 @@ func TestDistributedRunLifecycleAndIdempotency(t *testing.T) {
 	if err != nil || loadedFencedRun.Output != "current" {
 		t.Fatalf("current PostgreSQL fence did not win: run=%+v err=%v", loadedFencedRun, err)
 	}
+
+	recoveryRun := domain.Run{
+		ID: "run_recovery_" + suffix, AgentID: agent.ID, Input: "recovery", Status: domain.RunQueued,
+		MaxAttempts: 2, CreatedAt: time.Now().UTC(),
+	}
+	if _, _, err := repository.CreateRun(ctx, recoveryRun, ""); err != nil {
+		t.Fatal(err)
+	}
+	activeLease, acquired, err := redisCache.Acquire(ctx, "run:"+recoveryRun.ID, 200*time.Millisecond)
+	if err != nil || !acquired {
+		t.Fatalf("instance A recovery lease: acquired=%v err=%v", acquired, err)
+	}
+	activeFence, err := repository.ClaimRunExecution(ctx, recoveryRun.ID, activeLease.FencingToken())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := recoveryRun.Start(time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.UpdateRunFenced(ctx, recoveryRun, activeFence); err != nil {
+		t.Fatal(err)
+	}
+	if err := runEngine.Recover(ctx); err != nil {
+		t.Fatal(err)
+	}
+	stillRunning, err := repository.GetRun(ctx, recoveryRun.ID)
+	if err != nil || stillRunning.Status != domain.RunRunning {
+		t.Fatalf("healthy PostgreSQL Run was recovered: run=%+v err=%v", stillRunning, err)
+	}
+	time.Sleep(300 * time.Millisecond)
+	if err := runEngine.Recover(ctx); err != nil {
+		t.Fatal(err)
+	}
+	waitForStatus(t, ctx, repository, recoveryRun.ID, domain.RunSucceeded)
+	staleRecovery := recoveryRun
+	if err := staleRecovery.Succeed("crashed owner", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.UpdateRunFenced(ctx, staleRecovery, activeFence); !errors.Is(err, store.ErrStaleExecution) {
+		t.Fatalf("recovered PostgreSQL Run accepted crashed owner: %v", err)
+	}
 	testRedisLeaseRenewal(t, ctx, redisCache, "integration:"+suffix)
 }
 

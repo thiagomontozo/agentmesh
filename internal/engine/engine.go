@@ -194,13 +194,39 @@ func (e *Engine) Cancel(ctx context.Context, runID string) (domain.Run, error) {
 }
 
 func (e *Engine) Recover(ctx context.Context) error {
-	runIDs, err := e.store.RecoverPendingRuns(ctx)
+	pendingRuns, err := e.store.ListPendingRuns(ctx)
 	if err != nil {
-		return fmt.Errorf("recover pending runs: %w", err)
+		return fmt.Errorf("list pending runs: %w", err)
 	}
-	for _, runID := range runIDs {
-		if err := e.Enqueue(ctx, runID); err != nil {
-			return fmt.Errorf("recover run %s: %w", runID, err)
+	for _, pending := range pendingRuns {
+		if pending.Status == domain.RunQueued {
+			if err := e.Enqueue(ctx, pending.ID); err != nil {
+				return fmt.Errorf("enqueue pending run %s: %w", pending.ID, err)
+			}
+			continue
+		}
+		if pending.Status != domain.RunRunning {
+			continue
+		}
+		lease, acquired, err := e.coord.Acquire(ctx, "run:"+pending.ID, e.retry.LeaseTTL)
+		if err != nil {
+			return fmt.Errorf("acquire recovery lease for run %s: %w", pending.ID, err)
+		}
+		if !acquired {
+			continue
+		}
+		recovered, recoverErr := e.store.RecoverRun(ctx, pending.ID, lease.FencingToken())
+		releaseErr := releaseLease(lease)
+		if recoverErr != nil {
+			return fmt.Errorf("recover run %s: %w", pending.ID, recoverErr)
+		}
+		if releaseErr != nil {
+			return fmt.Errorf("release recovery lease for run %s: %w", pending.ID, releaseErr)
+		}
+		if recovered {
+			if err := e.Enqueue(ctx, pending.ID); err != nil {
+				return fmt.Errorf("enqueue recovered run %s: %w", pending.ID, err)
+			}
 		}
 	}
 	return nil
@@ -241,9 +267,7 @@ func (e *Engine) execute(ctx context.Context, runID string) error {
 		return fmt.Errorf("run %s is already being processed", run.ID)
 	}
 	defer func() {
-		releaseCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		if err := lease.Release(releaseCtx); err != nil {
+		if err := releaseLease(lease); err != nil {
 			slog.Error("run lease release failed", "run_id", run.ID, "error", err)
 		}
 	}()
@@ -362,6 +386,12 @@ func (e *Engine) execute(ctx context.Context, runID string) error {
 		case <-retryTimer.C:
 		}
 	}
+}
+
+func releaseLease(lease coordination.Lease) error {
+	releaseCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	return lease.Release(releaseCtx)
 }
 
 func (e *Engine) leaseRenewalError(runID string, keeper *leaseKeeper) error {

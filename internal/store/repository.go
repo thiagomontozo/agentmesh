@@ -12,6 +12,11 @@ var ErrRunCanceled = errors.New("run was canceled")
 var ErrStaleExecution = errors.New("stale run execution fence")
 var ErrRunNotExecutable = errors.New("run is not executable")
 
+type PendingRun struct {
+	ID     string
+	Status domain.RunStatus
+}
+
 type AgentRepository interface {
 	CreateAgent(ctx context.Context, agent domain.Agent) (domain.Agent, error)
 	GetAgent(ctx context.Context, id string) (domain.Agent, error)
@@ -26,7 +31,8 @@ type RunRepository interface {
 	UpdateRunFenced(ctx context.Context, run domain.Run, fence int64) error
 	CancelRun(ctx context.Context, id string, at time.Time) (domain.Run, error)
 	ListRuns(ctx context.Context) ([]domain.Run, error)
-	RecoverPendingRuns(ctx context.Context) ([]string, error)
+	ListPendingRuns(ctx context.Context) ([]PendingRun, error)
+	RecoverRun(ctx context.Context, id string, minimumFence int64) (bool, error)
 }
 
 type Repository interface {

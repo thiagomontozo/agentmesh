@@ -72,7 +72,7 @@ Every successful lease acquisition also carries a monotonic fencing token. Redis
 
 Fencing protects AgentMesh Run state, not arbitrary side effects already performed by an external Agent. Agent Protocol idempotency remains required for those effects. Redis persistence is enabled in Compose, but PostgreSQL's atomic claim still advances above its stored fence if a restored Redis sequence is lower.
 
-At startup, runs left in `running` state are reset to `queued`; queued runs are republished with their run ID as the JetStream deduplication key. This closes the common restart gap between database state and queue delivery without introducing a second scheduler.
+At startup, queued Runs are republished with their Run ID as the JetStream deduplication key. A running Run is never reset globally: the recovering Engine first attempts to acquire that Run's execution lease. A healthy owner keeps renewing the lease, so another replica skips its Run. After a crashed owner's lease expires, one recovering replica acquires ownership, atomically advances the persisted execution fence, resets the Run to `queued`, releases the recovery lease, and republishes work. A stale owner can no longer finalize after recovery. The operation is idempotent; competing recovery instances either fail lease acquisition or observe that the Run is no longer `running`.
 
 ## Delivery guarantees
 
