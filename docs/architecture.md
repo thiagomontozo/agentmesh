@@ -105,6 +105,12 @@ One scheduler and a fixed worker pool perform checks; there is no goroutine per 
 
 Health is derived and process-local. A restarted or different replica initially reports `unknown` until its own probe completes. It is not persisted, does not modify Agent configuration, does not remove unhealthy Agents, and is not consulted by runtime resolution or routing.
 
+## Agent discovery
+
+`internal/discovery.Service` combines exact persisted filters (`capability`, `runtime`, and `protocol`) with the operational state exposed by `agenthealth.Registry`. Configuration filters run in the repository first; health filtering and pagination then operate on that bounded result without changing the Agent definition. Memory and PostgreSQL return a deterministic creation-time/ID order, and the service enforces the order again at its boundary.
+
+The public Agent listing exposes those filters with optional `limit`/`offset` pagination. A zero limit preserves the original unbounded list behavior; explicit pages are capped at 200. Discovery returns candidates only. It contains no task interpretation, ranking, fallback, load balancing, or Run creation and therefore is deliberately not an Agent Router.
+
 ## Agent Registry lifecycle
 
 Agent definitions have immutable `id` and `created_at`, mutable execution metadata, `updated_at`, and a monotonic `version`. `PUT` performs a validated full replacement, while Memory and PostgreSQL compare the supplied version atomically before incrementing it. API mutations require a strong numeric `If-Match`, so concurrent writers cannot silently overwrite each other. Redis is refreshed after success and invalidated after conflicts to avoid retaining stale versions.

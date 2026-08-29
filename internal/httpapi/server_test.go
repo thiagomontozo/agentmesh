@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -257,6 +258,48 @@ func TestListAgentsFiltersByCanonicalCapability(t *testing.T) {
 	server.Handler().ServeHTTP(invalidResponse, invalid)
 	if invalidResponse.Code != http.StatusBadRequest {
 		t.Fatalf("expected invalid capability rejection, got %d: %s", invalidResponse.Code, invalidResponse.Body.String())
+	}
+}
+
+func TestAgentDiscoveryFiltersHealthAndPaginates(t *testing.T) {
+	server, _ := newTestServer(t)
+	health := healthMapRegistry{states: make(map[string]agenthealth.Status)}
+	server.SetAgentHealth(health)
+	for index, name := range []string{"Legal A", "Legal B", "Demo"} {
+		body := `{"name":"` + name + `","capabilities":["legal-analysis"]}`
+		if index < 2 {
+			body = `{"name":"` + name + `","runtime":"remote","protocol":"http","endpoint":"http://agent-` + strconv.Itoa(index) + `","capabilities":["legal-analysis"]}`
+		}
+		request := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(body))
+		response := httptest.NewRecorder()
+		server.Handler().ServeHTTP(response, request)
+		if response.Code != http.StatusCreated {
+			t.Fatalf("create failed: %d %s", response.Code, response.Body.String())
+		}
+		var agent domain.Agent
+		if err := json.Unmarshal(response.Body.Bytes(), &agent); err != nil {
+			t.Fatal(err)
+		}
+		if index == 0 {
+			health.states[agent.ID] = agenthealth.StatusUnhealthy
+		} else if index == 1 {
+			health.states[agent.ID] = agenthealth.StatusHealthy
+		}
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/agents?capability=legal-analysis&runtime=remote&protocol=http&status=healthy&limit=1&offset=0", nil)
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"name":"Legal B"`) ||
+		!strings.Contains(response.Body.String(), `"total":1`) || strings.Contains(response.Body.String(), `"name":"Legal A"`) {
+		t.Fatalf("unexpected discovery response: %d %s", response.Code, response.Body.String())
+	}
+
+	invalid := httptest.NewRequest(http.MethodGet, "/api/v1/agents?health=healthy&status=unhealthy", nil)
+	invalidResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(invalidResponse, invalid)
+	if invalidResponse.Code != http.StatusBadRequest {
+		t.Fatalf("expected conflicting aliases to fail: %d %s", invalidResponse.Code, invalidResponse.Body.String())
 	}
 }
 
@@ -647,6 +690,20 @@ type recordingAgentHealth struct {
 	refreshed []domain.Agent
 	forgotten string
 }
+
+type healthMapRegistry struct {
+	states map[string]agenthealth.Status
+}
+
+func (h healthMapRegistry) State(agentID string) agenthealth.State {
+	status := h.states[agentID]
+	if status == "" {
+		status = agenthealth.StatusUnknown
+	}
+	return agenthealth.State{AgentID: agentID, Status: status}
+}
+func (healthMapRegistry) Refresh(domain.Agent) {}
+func (healthMapRegistry) Forget(string)        {}
 
 func (r *recordingAgentHealth) State(agentID string) agenthealth.State {
 	return agenthealth.State{AgentID: agentID, Status: agenthealth.StatusUnknown}

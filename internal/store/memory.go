@@ -131,35 +131,52 @@ func (m *Memory) GetAgent(_ context.Context, id string) (domain.Agent, error) {
 	return cloneAgent(agent), nil
 }
 
-func (m *Memory) ListAgents(_ context.Context) ([]domain.Agent, error) {
+func (m *Memory) ListAgents(ctx context.Context) ([]domain.Agent, error) {
+	return m.FindAgents(ctx, AgentFilter{})
+}
+
+func (m *Memory) ListAgentsByCapability(ctx context.Context, capability string) ([]domain.Agent, error) {
+	return m.FindAgents(ctx, AgentFilter{Capability: capability})
+}
+
+func (m *Memory) FindAgents(_ context.Context, filter AgentFilter) ([]domain.Agent, error) {
+	var err error
+	if filter.Capability != "" {
+		filter.Capability, err = domain.NormalizeCapability(filter.Capability)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if filter.Runtime, err = domain.NormalizeAgentIdentifier("runtime", filter.Runtime); err != nil {
+		return nil, err
+	}
+	if filter.Protocol, err = domain.NormalizeAgentIdentifier("protocol", filter.Protocol); err != nil {
+		return nil, err
+	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	result := make([]domain.Agent, 0, len(m.agents))
 	for _, agent := range m.agents {
+		if (filter.Runtime != "" && agent.Runtime != filter.Runtime) ||
+			(filter.Protocol != "" && agent.Protocol != filter.Protocol) {
+			continue
+		}
+		if filter.Capability != "" && !agentHasCapability(agent, filter.Capability) {
+			continue
+		}
 		result = append(result, cloneAgent(agent))
 	}
 	sortAgents(result)
 	return result, nil
 }
 
-func (m *Memory) ListAgentsByCapability(_ context.Context, capability string) ([]domain.Agent, error) {
-	capability, err := domain.NormalizeCapability(capability)
-	if err != nil {
-		return nil, err
-	}
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	result := make([]domain.Agent, 0)
-	for _, agent := range m.agents {
-		for _, candidate := range agent.Capabilities {
-			if candidate == capability {
-				result = append(result, cloneAgent(agent))
-				break
-			}
+func agentHasCapability(agent domain.Agent, capability string) bool {
+	for _, candidate := range agent.Capabilities {
+		if candidate == capability {
+			return true
 		}
 	}
-	sortAgents(result)
-	return result, nil
+	return false
 }
 
 func sortAgents(agents []domain.Agent) {

@@ -58,10 +58,10 @@ func (a *Agent) NormalizeAndValidate() error {
 	if a.Name == "" {
 		return fmt.Errorf("agent name is required")
 	}
-	if err := validateAgentIdentifier("runtime", a.Runtime); err != nil {
+	if _, err := NormalizeAgentIdentifier("runtime", a.Runtime); err != nil {
 		return err
 	}
-	if err := validateAgentIdentifier("protocol", a.Protocol); err != nil {
+	if _, err := NormalizeAgentIdentifier("protocol", a.Protocol); err != nil {
 		return err
 	}
 	if a.Protocol != "" && a.Runtime == "" {
@@ -122,9 +122,10 @@ func NormalizeCapability(value string) (string, error) {
 	return result, nil
 }
 
-func validateAgentIdentifier(field, value string) error {
+func NormalizeAgentIdentifier(field, value string) (string, error) {
+	value = strings.ToLower(strings.TrimSpace(value))
 	if value == "" {
-		return nil
+		return "", nil
 	}
 	for _, character := range value {
 		if character >= 'a' && character <= 'z' ||
@@ -132,7 +133,7 @@ func validateAgentIdentifier(field, value string) error {
 			character == '-' || character == '_' || character == '.' {
 			continue
 		}
-		return fmt.Errorf("%s must contain only lowercase letters, numbers, hyphens, underscores or dots", field)
+		return "", fmt.Errorf("%s must contain only lowercase letters, numbers, hyphens, underscores or dots", field)
 	}
-	return nil
+	return value, nil
 }
