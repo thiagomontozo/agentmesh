@@ -8,6 +8,10 @@ Capture the `X-Request-ID` response header or provide your own safe value. JSON 
 
 This is expected because operational Agent health is derived per replica and is not persisted. The background workers will probe remote HTTP Agents shortly after startup. Calling `GET /api/v1/agents/{id}/health` also schedules a non-blocking refresh. Confirm the Agent exposes the configured `AGENTMESH_AGENT_HEALTH_PATH` and returns a `2xx` response.
 
+## Agent update or delete returns 409
+
+For updates, fetch the Agent again and retry with its latest strong `ETag` in `If-Match`; another writer changed the definition. Deletion also returns `409` when any Run references the Agent. That protection is intentional and applies to terminal Runs so historical execution records never point to a removed Agent.
+
 ## `unlinkat ... httpapi.test.exe` on Windows
 
 If all package tests report `ok` and the error occurs only while Go removes a temporary `.test.exe`, first treat it as Windows file locking rather than an AgentMesh failure. Antivirus scanning and indexing can briefly retain newly created executables.

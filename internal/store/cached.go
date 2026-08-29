@@ -36,7 +36,7 @@ func (c *Cached) GetAgent(ctx context.Context, id string) (domain.Agent, error) 
 	if err != nil {
 		slog.Warn("agent cache read failed", "agent_id", id, "error", err)
 	}
-	if found {
+	if found && agent.Version >= 1 {
 		return agent, nil
 	}
 	agent, err = c.inner.GetAgent(ctx, id)
@@ -45,6 +45,26 @@ func (c *Cached) GetAgent(ctx context.Context, id string) (domain.Agent, error) 
 	}
 	c.set(ctx, agentKey(id), agent)
 	return agent, nil
+}
+
+func (c *Cached) UpdateAgent(ctx context.Context, agent domain.Agent, expectedVersion int64) (domain.Agent, error) {
+	updated, err := c.inner.UpdateAgent(ctx, agent, expectedVersion)
+	if err != nil {
+		if errors.Is(err, ErrConflict) || errors.Is(err, ErrNotFound) {
+			c.delete(ctx, agentKey(agent.ID))
+		}
+		return domain.Agent{}, err
+	}
+	c.set(ctx, agentKey(updated.ID), updated)
+	return updated, nil
+}
+
+func (c *Cached) DeleteAgent(ctx context.Context, id string, expectedVersion int64) error {
+	err := c.inner.DeleteAgent(ctx, id, expectedVersion)
+	if err == nil || errors.Is(err, ErrConflict) || errors.Is(err, ErrNotFound) {
+		c.delete(ctx, agentKey(id))
+	}
+	return err
 }
 
 func (c *Cached) ListAgents(ctx context.Context) ([]domain.Agent, error) {

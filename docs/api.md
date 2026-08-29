@@ -43,6 +43,32 @@ curl -X POST http://localhost:8080/api/v1/agents \
 
 `runtime` and `protocol` are extensible lowercase identifiers. For remote HTTP execution, use `runtime: "remote"` and `protocol: "http"`; `endpoint` is an HTTP or HTTPS base URL and AgentMesh calls its `/v1/runs` path using [Agent Protocol V1](agent-protocol-v1.md). Capabilities remain metadata only: AgentMesh does not route by capability.
 
+Agent responses include `version`, `created_at`, `updated_at`, and a strong numeric `ETag`. Updates are full replacements and require the current ETag:
+
+```bash
+curl -X PUT http://localhost:8080/api/v1/agents/agt_REPLACE_ME \
+  -H 'Content-Type: application/json' \
+  -H 'If-Match: "1"' \
+  -d '{
+    "name":"Legal Agent v2",
+    "runtime":"remote",
+    "protocol":"http",
+    "endpoint":"http://legal-agent:9001",
+    "capabilities":["legal-search","legal-analysis"]
+  }'
+```
+
+Successful update increments `version` and returns the new ETag. A stale ETag returns `409 Conflict`; missing, weak, or malformed `If-Match` returns `400 Bad Request`.
+
+Delete an Agent with the current ETag:
+
+```bash
+curl -X DELETE http://localhost:8080/api/v1/agents/agt_REPLACE_ME \
+  -H 'If-Match: "2"'
+```
+
+Deletion returns `204 No Content`. Any Agent referenced by a queued, running, succeeded, failed, or canceled Run is protected and returns `409 Conflict`, preserving historical Run references. Agent health state is forgotten after a successful update target change or deletion.
+
 List or fetch agents:
 
 ```bash

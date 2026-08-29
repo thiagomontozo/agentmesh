@@ -89,15 +89,15 @@ func (r *Repository) Migrate(ctx context.Context) error {
 }
 
 func (r *Repository) CreateAgent(ctx context.Context, agent domain.Agent) (domain.Agent, error) {
-	if err := agent.NormalizeAndValidate(); err != nil {
+	if err := agent.InitializeForCreate(time.Now()); err != nil {
 		return domain.Agent{}, err
 	}
 	_, err := r.pool.Exec(ctx,
 		`INSERT INTO agents (
-			id, name, system_prompt, runtime, protocol, endpoint, capabilities, created_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+			id, name, system_prompt, runtime, protocol, endpoint, capabilities, created_at, updated_at, version
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
 		agent.ID, agent.Name, agent.SystemPrompt, agent.Runtime, agent.Protocol,
-		agent.Endpoint, agent.Capabilities, agent.CreatedAt,
+		agent.Endpoint, agent.Capabilities, agent.CreatedAt, agent.UpdatedAt, agent.Version,
 	)
 	if err != nil {
 		return domain.Agent{}, fmt.Errorf("insert agent: %w", err)
@@ -105,15 +105,11 @@ func (r *Repository) CreateAgent(ctx context.Context, agent domain.Agent) (domai
 	return agent, nil
 }
 
+const agentSelect = `SELECT id, name, system_prompt, runtime, protocol, endpoint, capabilities,
+	created_at, updated_at, version FROM agents`
+
 func (r *Repository) GetAgent(ctx context.Context, id string) (domain.Agent, error) {
-	var agent domain.Agent
-	err := r.pool.QueryRow(ctx,
-		`SELECT id, name, system_prompt, runtime, protocol, endpoint, capabilities, created_at
-		 FROM agents WHERE id = $1`, id,
-	).Scan(
-		&agent.ID, &agent.Name, &agent.SystemPrompt, &agent.Runtime, &agent.Protocol,
-		&agent.Endpoint, &agent.Capabilities, &agent.CreatedAt,
-	)
+	agent, err := scanAgent(r.pool.QueryRow(ctx, agentSelect+" WHERE id = $1", id))
 	if err == pgx.ErrNoRows {
 		return domain.Agent{}, store.ErrNotFound
 	}
@@ -124,25 +120,83 @@ func (r *Repository) GetAgent(ctx context.Context, id string) (domain.Agent, err
 }
 
 func (r *Repository) ListAgents(ctx context.Context) ([]domain.Agent, error) {
-	rows, err := r.pool.Query(ctx, `
-		SELECT id, name, system_prompt, runtime, protocol, endpoint, capabilities, created_at
-		FROM agents ORDER BY created_at, id`)
+	rows, err := r.pool.Query(ctx, agentSelect+" ORDER BY created_at, id")
 	if err != nil {
 		return nil, fmt.Errorf("list agents: %w", err)
 	}
 	defer rows.Close()
 	result := make([]domain.Agent, 0)
 	for rows.Next() {
-		var agent domain.Agent
-		if err := rows.Scan(
-			&agent.ID, &agent.Name, &agent.SystemPrompt, &agent.Runtime, &agent.Protocol,
-			&agent.Endpoint, &agent.Capabilities, &agent.CreatedAt,
-		); err != nil {
+		agent, err := scanAgent(rows)
+		if err != nil {
 			return nil, err
 		}
 		result = append(result, agent)
 	}
 	return result, rows.Err()
+}
+
+func (r *Repository) UpdateAgent(ctx context.Context, agent domain.Agent, expectedVersion int64) (domain.Agent, error) {
+	if err := agent.NormalizeAndValidate(); err != nil {
+		return domain.Agent{}, err
+	}
+	updated, err := scanAgent(r.pool.QueryRow(ctx, `
+		UPDATE agents
+		SET name = $2, system_prompt = $3, runtime = $4, protocol = $5,
+			endpoint = $6, capabilities = $7, updated_at = now(), version = version + 1
+		WHERE id = $1 AND version = $8
+		RETURNING id, name, system_prompt, runtime, protocol, endpoint, capabilities,
+			created_at, updated_at, version`,
+		agent.ID, agent.Name, agent.SystemPrompt, agent.Runtime, agent.Protocol,
+		agent.Endpoint, agent.Capabilities, expectedVersion,
+	))
+	if err == nil {
+		return updated, nil
+	}
+	if err != pgx.ErrNoRows {
+		return domain.Agent{}, fmt.Errorf("update agent: %w", err)
+	}
+	var currentVersion int64
+	err = r.pool.QueryRow(ctx, "SELECT version FROM agents WHERE id = $1", agent.ID).Scan(&currentVersion)
+	if err == pgx.ErrNoRows {
+		return domain.Agent{}, store.ErrNotFound
+	}
+	if err != nil {
+		return domain.Agent{}, fmt.Errorf("classify agent update: %w", err)
+	}
+	return domain.Agent{}, fmt.Errorf("%w: current=%d expected=%d", store.ErrConflict, currentVersion, expectedVersion)
+}
+
+func (r *Repository) DeleteAgent(ctx context.Context, id string, expectedVersion int64) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin agent deletion: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var currentVersion int64
+	if err := tx.QueryRow(ctx, "SELECT version FROM agents WHERE id = $1 FOR UPDATE", id).Scan(&currentVersion); err != nil {
+		if err == pgx.ErrNoRows {
+			return store.ErrNotFound
+		}
+		return fmt.Errorf("lock agent for deletion: %w", err)
+	}
+	if expectedVersion < 1 || currentVersion != expectedVersion {
+		return fmt.Errorf("%w: current=%d expected=%d", store.ErrConflict, currentVersion, expectedVersion)
+	}
+	var inUse bool
+	if err := tx.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM runs WHERE agent_id = $1)", id).Scan(&inUse); err != nil {
+		return fmt.Errorf("check agent dependencies: %w", err)
+	}
+	if inUse {
+		return store.ErrAgentInUse
+	}
+	if _, err := tx.Exec(ctx, "DELETE FROM agents WHERE id = $1", id); err != nil {
+		return fmt.Errorf("delete agent: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit agent deletion: %w", err)
+	}
+	return nil
 }
 
 func (r *Repository) CreateRun(ctx context.Context, run domain.Run, idempotencyKey string) (domain.Run, bool, error) {
@@ -447,6 +501,15 @@ func scanRun(row rowScanner) (domain.Run, error) {
 		&run.CreatedAt, &run.StartedAt, &run.CompletedAt,
 	)
 	return run, err
+}
+
+func scanAgent(row rowScanner) (domain.Agent, error) {
+	var agent domain.Agent
+	err := row.Scan(
+		&agent.ID, &agent.Name, &agent.SystemPrompt, &agent.Runtime, &agent.Protocol,
+		&agent.Endpoint, &agent.Capabilities, &agent.CreatedAt, &agent.UpdatedAt, &agent.Version,
+	)
+	return agent, err
 }
 
 var _ store.Repository = (*Repository)(nil)

@@ -79,6 +79,7 @@ The Engine resolves the already-selected Agent's runtime through a concurrency-s
 - JSON operational logs correlated by request, instance, worker, Run, Agent, and attempt
 - Persisted request correlation and explicit Run duration
 - Derived `unknown`/`healthy`/`unhealthy` status for remote HTTP Agents
+- Versioned Agent update/delete with optimistic concurrency and Run-history protection
 - Restart recovery for queued/running work
 
 ## API
@@ -90,6 +91,8 @@ The Engine resolves the already-selected Agent's runtime through a concurrency-s
 | `POST` | `/api/v1/agents` | Create an agent |
 | `GET` | `/api/v1/agents` | List agents |
 | `GET` | `/api/v1/agents/{id}` | Get an agent |
+| `PUT` | `/api/v1/agents/{id}` | Replace an Agent definition using `If-Match` |
+| `DELETE` | `/api/v1/agents/{id}` | Delete an unused Agent using `If-Match` |
 | `GET` | `/api/v1/agents/{id}/health` | Get derived Agent health and schedule refresh |
 | `POST` | `/api/v1/runs` | Submit a run |
 | `GET` | `/api/v1/runs` | List runs |

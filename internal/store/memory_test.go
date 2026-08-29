@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -24,12 +25,95 @@ func TestMemoryAgentLifecycle(t *testing.T) {
 	if loaded.Name != agent.Name {
 		t.Fatalf("expected %q, got %q", agent.Name, loaded.Name)
 	}
+	if loaded.Version != 1 || loaded.UpdatedAt.IsZero() {
+		t.Fatalf("new Agent was not initialized for optimistic concurrency: %+v", loaded)
+	}
 	agents, err := memory.ListAgents(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := len(agents); got != 1 {
 		t.Fatalf("expected 1 agent, got %d", got)
+	}
+}
+
+func TestMemoryAgentUpdateAndDeleteLifecycle(t *testing.T) {
+	ctx := context.Background()
+	memory := NewMemory()
+	created, err := memory.CreateAgent(ctx, domain.Agent{ID: "agt_1", Name: "original"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated, err := memory.UpdateAgent(ctx, domain.Agent{
+		ID: created.ID, Name: "updated", Runtime: "remote", Protocol: "http",
+		Endpoint: "http://agent:9000", Capabilities: []string{"testing"},
+	}, created.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Version != 2 || updated.Name != "updated" || !updated.CreatedAt.Equal(created.CreatedAt) || updated.UpdatedAt.Before(created.UpdatedAt) {
+		t.Fatalf("unexpected updated Agent: %+v", updated)
+	}
+	if _, err := memory.UpdateAgent(ctx, domain.Agent{ID: created.ID, Name: "stale"}, created.Version); !errors.Is(err, ErrConflict) {
+		t.Fatalf("expected stale update conflict, got %v", err)
+	}
+	if err := memory.DeleteAgent(ctx, updated.ID, created.Version); !errors.Is(err, ErrConflict) {
+		t.Fatalf("expected stale delete conflict, got %v", err)
+	}
+	if err := memory.DeleteAgent(ctx, updated.ID, updated.Version); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := memory.GetAgent(ctx, updated.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected deleted Agent to be absent, got %v", err)
+	}
+}
+
+func TestMemoryRejectsAgentDeletionWhenRunDependsOnIt(t *testing.T) {
+	ctx := context.Background()
+	memory := NewMemory()
+	agent, err := memory.CreateAgent(ctx, domain.Agent{ID: "agt_1", Name: "used"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := memory.CreateRun(ctx, domain.Run{ID: "run_1", AgentID: agent.ID, Status: domain.RunSucceeded}, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := memory.DeleteAgent(ctx, agent.ID, agent.Version); !errors.Is(err, ErrAgentInUse) {
+		t.Fatalf("expected dependent Run to protect Agent history, got %v", err)
+	}
+}
+
+func TestMemoryAgentUpdatesAreOptimisticallyConcurrent(t *testing.T) {
+	ctx := context.Background()
+	memory := NewMemory()
+	agent, err := memory.CreateAgent(ctx, domain.Agent{ID: "agt_1", Name: "original"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	errorsChannel := make(chan error, 2)
+	var wait sync.WaitGroup
+	for _, name := range []string{"first", "second"} {
+		wait.Add(1)
+		go func(name string) {
+			defer wait.Done()
+			_, updateErr := memory.UpdateAgent(ctx, domain.Agent{ID: agent.ID, Name: name}, agent.Version)
+			errorsChannel <- updateErr
+		}(name)
+	}
+	wait.Wait()
+	close(errorsChannel)
+	var successes, conflicts int
+	for updateErr := range errorsChannel {
+		if updateErr == nil {
+			successes++
+		} else if errors.Is(updateErr, ErrConflict) {
+			conflicts++
+		} else {
+			t.Fatalf("unexpected concurrent update error: %v", updateErr)
+		}
+	}
+	if successes != 1 || conflicts != 1 {
+		t.Fatalf("expected one update and one conflict, got successes=%d conflicts=%d", successes, conflicts)
 	}
 }
 

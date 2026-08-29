@@ -104,3 +104,9 @@ Terminal Runs expose persisted `duration_ms`, measured from execution start or, 
 One scheduler and a fixed worker pool perform checks; there is no goroutine per Agent. The queue is bounded and refresh submission is non-blocking, so slow or numerous Agents cannot block normal API handlers. `GET /api/v1/agents/{id}/health` returns the current state immediately and requests a refresh.
 
 Health is derived and process-local. A restarted or different replica initially reports `unknown` until its own probe completes. It is not persisted, does not modify Agent configuration, does not remove unhealthy Agents, and is not consulted by runtime resolution or routing.
+
+## Agent Registry lifecycle
+
+Agent definitions have immutable `id` and `created_at`, mutable execution metadata, `updated_at`, and a monotonic `version`. `PUT` performs a validated full replacement, while Memory and PostgreSQL compare the supplied version atomically before incrementing it. API mutations require a strong numeric `If-Match`, so concurrent writers cannot silently overwrite each other. Redis is refreshed after success and invalidated after conflicts to avoid retaining stale versions.
+
+`DELETE` uses the same optimistic version contract. Memory checks Run references while holding its repository mutex. PostgreSQL locks the Agent row, checks dependent Runs, and deletes in one transaction. Any Run reference blocks deletion regardless of lifecycle state, preserving Agent identity and execution history. Operational health remains outside this persisted configuration lifecycle and is refreshed or forgotten after mutations.

@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -59,6 +60,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/agents", s.listAgents)
 	s.mux.HandleFunc("POST /api/v1/agents", s.createAgent)
 	s.mux.HandleFunc("GET /api/v1/agents/{id}", s.getAgent)
+	s.mux.HandleFunc("PUT /api/v1/agents/{id}", s.updateAgent)
+	s.mux.HandleFunc("DELETE /api/v1/agents/{id}", s.deleteAgent)
 	s.mux.HandleFunc("GET /api/v1/agents/{id}/health", s.getAgentHealth)
 	s.mux.HandleFunc("GET /api/v1/runs", s.listRuns)
 	s.mux.HandleFunc("POST /api/v1/runs", s.createRun)
@@ -115,14 +118,16 @@ func (s *Server) createAgent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if _, err := s.store.CreateAgent(r.Context(), agent); err != nil {
+	created, err := s.store.CreateAgent(r.Context(), agent)
+	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not create agent")
 		return
 	}
-	s.agentHealth.Refresh(agent)
-	attributes := append(observability.ContextAttrs(r.Context()), "agent_id", agent.ID, "runtime", agent.Runtime)
+	s.agentHealth.Refresh(created)
+	attributes := append(observability.ContextAttrs(r.Context()), "agent_id", created.ID, "runtime", created.Runtime)
 	slog.InfoContext(r.Context(), "agent created", attributes...)
-	writeJSON(w, http.StatusCreated, agent)
+	setAgentETag(w, created.Version)
+	writeJSON(w, http.StatusCreated, created)
 }
 
 func (s *Server) getAgentHealth(w http.ResponseWriter, r *http.Request) {
@@ -159,7 +164,118 @@ func (s *Server) getAgent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not load agent")
 		return
 	}
+	setAgentETag(w, agent.Version)
 	writeJSON(w, http.StatusOK, agent)
+}
+
+func (s *Server) updateAgent(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	_, err := s.store.GetAgent(r.Context(), id)
+	if errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "agent not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load agent")
+		return
+	}
+	expectedVersion, err := agentExpectedVersion(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	var request createAgentRequest
+	if err := decodeJSON(r, &request); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	agent := domain.Agent{
+		ID: id, Name: request.Name, SystemPrompt: request.SystemPrompt,
+		Runtime: request.Runtime, Protocol: request.Protocol, Endpoint: request.Endpoint,
+		Capabilities: request.Capabilities,
+	}
+	if err := agent.NormalizeAndValidate(); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	updated, err := s.store.UpdateAgent(r.Context(), agent, expectedVersion)
+	if errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "agent not found")
+		return
+	}
+	if errors.Is(err, store.ErrConflict) {
+		writeError(w, http.StatusConflict, "agent was modified concurrently")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not update agent")
+		return
+	}
+	s.agentHealth.Forget(updated.ID)
+	s.agentHealth.Refresh(updated)
+	setAgentETag(w, updated.Version)
+	attributes := append(observability.ContextAttrs(r.Context()), "agent_id", updated.ID, "version", updated.Version)
+	slog.InfoContext(r.Context(), "agent updated", attributes...)
+	writeJSON(w, http.StatusOK, updated)
+}
+
+func (s *Server) deleteAgent(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	_, err := s.store.GetAgent(r.Context(), id)
+	if errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "agent not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load agent")
+		return
+	}
+	expectedVersion, err := agentExpectedVersion(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	err = s.store.DeleteAgent(r.Context(), id, expectedVersion)
+	if errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "agent not found")
+		return
+	}
+	if errors.Is(err, store.ErrConflict) {
+		writeError(w, http.StatusConflict, "agent was modified concurrently")
+		return
+	}
+	if errors.Is(err, store.ErrAgentInUse) {
+		writeError(w, http.StatusConflict, "agent has dependent runs and cannot be deleted")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not delete agent")
+		return
+	}
+	s.agentHealth.Forget(id)
+	attributes := append(observability.ContextAttrs(r.Context()), "agent_id", id, "version", expectedVersion)
+	slog.InfoContext(r.Context(), "agent deleted", attributes...)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func agentExpectedVersion(r *http.Request) (int64, error) {
+	value := strings.TrimSpace(r.Header.Get("If-Match"))
+	if value == "" {
+		return 0, fmt.Errorf("If-Match is required for Agent mutations")
+	}
+	if strings.HasPrefix(value, "W/") || len(value) < 3 || value[0] != '"' || value[len(value)-1] != '"' {
+		return 0, fmt.Errorf("If-Match must use a strong numeric ETag")
+	}
+	value = value[1 : len(value)-1]
+	version, err := strconv.ParseInt(value, 10, 64)
+	if err != nil || version < 1 {
+		return 0, fmt.Errorf("If-Match must contain a positive numeric Agent version")
+	}
+	return version, nil
+}
+
+func setAgentETag(w http.ResponseWriter, version int64) {
+	w.Header().Set("ETag", fmt.Sprintf(`"%d"`, version))
 }
 
 type createRunRequest struct {

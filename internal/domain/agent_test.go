@@ -1,6 +1,9 @@
 package domain
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestAgentLegacyDefinitionRemainsValid(t *testing.T) {
 	agent := Agent{ID: "agt_legacy", Name: "Legacy"}
@@ -9,6 +12,17 @@ func TestAgentLegacyDefinitionRemainsValid(t *testing.T) {
 	}
 	if agent.Runtime != "" || agent.Protocol != "" || agent.Endpoint != "" || len(agent.Capabilities) != 0 {
 		t.Fatalf("unexpected legacy execution metadata: %+v", agent)
+	}
+}
+
+func TestAgentInitializesRegistryMetadata(t *testing.T) {
+	now := time.Date(2026, time.August, 29, 12, 0, 0, 0, time.FixedZone("test", -3*60*60))
+	agent := Agent{ID: "agt_1", Name: "test"}
+	if err := agent.InitializeForCreate(now); err != nil {
+		t.Fatal(err)
+	}
+	if agent.Version != 1 || !agent.CreatedAt.Equal(now) || !agent.UpdatedAt.Equal(now) || agent.CreatedAt.Location() != time.UTC {
+		t.Fatalf("unexpected registry metadata: %+v", agent)
 	}
 }
 

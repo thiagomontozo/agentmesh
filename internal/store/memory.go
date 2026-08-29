@@ -70,13 +70,55 @@ func (m *Memory) ListRunEvents(_ context.Context, runID string, limit int) ([]do
 }
 
 func (m *Memory) CreateAgent(_ context.Context, agent domain.Agent) (domain.Agent, error) {
+	if err := agent.InitializeForCreate(time.Now()); err != nil {
+		return domain.Agent{}, err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, exists := m.agents[agent.ID]; exists {
+		return domain.Agent{}, ErrConflict
+	}
+	m.agents[agent.ID] = cloneAgent(agent)
+	return cloneAgent(agent), nil
+}
+
+func (m *Memory) UpdateAgent(_ context.Context, agent domain.Agent, expectedVersion int64) (domain.Agent, error) {
 	if err := agent.NormalizeAndValidate(); err != nil {
 		return domain.Agent{}, err
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	existing, ok := m.agents[agent.ID]
+	if !ok {
+		return domain.Agent{}, ErrNotFound
+	}
+	if expectedVersion < 1 || existing.Version != expectedVersion {
+		return domain.Agent{}, ErrConflict
+	}
+	agent.CreatedAt = existing.CreatedAt
+	agent.UpdatedAt = time.Now().UTC()
+	agent.Version = existing.Version + 1
 	m.agents[agent.ID] = cloneAgent(agent)
 	return cloneAgent(agent), nil
+}
+
+func (m *Memory) DeleteAgent(_ context.Context, id string, expectedVersion int64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	agent, ok := m.agents[id]
+	if !ok {
+		return ErrNotFound
+	}
+	if expectedVersion < 1 || agent.Version != expectedVersion {
+		return ErrConflict
+	}
+	for _, run := range m.runs {
+		if run.AgentID == id {
+			return ErrAgentInUse
+		}
+	}
+	delete(m.agents, id)
+	return nil
 }
 
 func (m *Memory) GetAgent(_ context.Context, id string) (domain.Agent, error) {
