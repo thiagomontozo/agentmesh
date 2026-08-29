@@ -77,15 +77,49 @@ func (a *Agent) NormalizeAndValidate() error {
 		}
 	}
 
-	normalizedCapabilities := make([]string, len(a.Capabilities))
-	for index, capability := range a.Capabilities {
-		normalizedCapabilities[index] = strings.TrimSpace(capability)
-		if normalizedCapabilities[index] == "" {
-			return fmt.Errorf("capabilities cannot contain blank values")
+	normalizedCapabilities := make([]string, 0, len(a.Capabilities))
+	seenCapabilities := make(map[string]struct{}, len(a.Capabilities))
+	for _, capability := range a.Capabilities {
+		normalized, err := NormalizeCapability(capability)
+		if err != nil {
+			return err
 		}
+		if _, duplicate := seenCapabilities[normalized]; duplicate {
+			continue
+		}
+		seenCapabilities[normalized] = struct{}{}
+		normalizedCapabilities = append(normalizedCapabilities, normalized)
 	}
 	a.Capabilities = normalizedCapabilities
 	return nil
+}
+
+// NormalizeCapability returns the canonical key used for persistence and exact
+// capability discovery. Capability keys intentionally remain small identifiers,
+// not a centrally managed taxonomy.
+func NormalizeCapability(value string) (string, error) {
+	value = strings.ToLower(strings.TrimSpace(value))
+	var normalized strings.Builder
+	separator := false
+	for _, character := range value {
+		switch {
+		case character >= 'a' && character <= 'z', character >= '0' && character <= '9', character == '.':
+			if separator && normalized.Len() > 0 {
+				normalized.WriteByte('-')
+			}
+			separator = false
+			normalized.WriteRune(character)
+		case character == '-' || character == '_' || character == ' ' || character == '\t' || character == '\n' || character == '\r':
+			separator = normalized.Len() > 0
+		default:
+			return "", fmt.Errorf("capability %q must contain only letters, numbers, dots, hyphens, underscores or spaces", value)
+		}
+	}
+	result := normalized.String()
+	if result == "" {
+		return "", fmt.Errorf("capabilities cannot contain blank values")
+	}
+	return result, nil
 }
 
 func validateAgentIdentifier(field, value string) error {

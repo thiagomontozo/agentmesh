@@ -4,7 +4,7 @@ AgentMesh has two runtime modes that share the same HTTP, domain, engine, and ex
 
 ## Agent definitions
 
-Agent definitions can optionally declare `runtime`, `protocol`, `endpoint`, and `capabilities`. These fields describe how an agent may be executed by future runtime adapters; capabilities are metadata only. Legacy definitions without execution metadata remain valid and continue to use the deterministic demo executor.
+Agent definitions can optionally declare `runtime`, `protocol`, `endpoint`, and `capabilities`. Capability keys have one deterministic lowercase/hyphen form and are deduplicated on write. Memory performs exact scans, while PostgreSQL uses its `TEXT[]` representation and a GIN containment index for exact capability lookup. This is a lightweight declared model, not a centrally governed taxonomy, semantic matcher, or Agent router. Legacy definitions without execution metadata remain valid and continue to use the deterministic demo executor.
 
 The Engine now resolves this metadata before starting an attempt. An empty runtime preserves legacy behavior by resolving to `demo`; an unknown runtime fails explicitly and is not silently executed by the demo implementation.
 

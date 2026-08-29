@@ -80,6 +80,7 @@ The Engine resolves the already-selected Agent's runtime through a concurrency-s
 - Persisted request correlation and explicit Run duration
 - Derived `unknown`/`healthy`/`unhealthy` status for remote HTTP Agents
 - Versioned Agent update/delete with optimistic concurrency and Run-history protection
+- Normalized, deduplicated Agent capabilities with exact indexed lookup
 - Restart recovery for queued/running work
 
 ## API
@@ -89,7 +90,7 @@ The Engine resolves the already-selected Agent's runtime through a concurrency-s
 | `GET` | `/healthz` | Liveness |
 | `GET` | `/readyz` | Readiness |
 | `POST` | `/api/v1/agents` | Create an agent |
-| `GET` | `/api/v1/agents` | List agents |
+| `GET` | `/api/v1/agents` | List agents, optionally filtered by exact `capability` |
 | `GET` | `/api/v1/agents/{id}` | Get an agent |
 | `PUT` | `/api/v1/agents/{id}` | Replace an Agent definition using `If-Match` |
 | `DELETE` | `/api/v1/agents/{id}` | Delete an unused Agent using `If-Match` |

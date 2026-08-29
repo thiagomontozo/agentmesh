@@ -122,7 +122,19 @@ func (r *Repository) GetAgent(ctx context.Context, id string) (domain.Agent, err
 }
 
 func (r *Repository) ListAgents(ctx context.Context) ([]domain.Agent, error) {
-	rows, err := r.pool.Query(ctx, agentSelect+" ORDER BY created_at, id")
+	return r.listAgents(ctx, agentSelect+" ORDER BY created_at, id")
+}
+
+func (r *Repository) ListAgentsByCapability(ctx context.Context, capability string) ([]domain.Agent, error) {
+	capability, err := domain.NormalizeCapability(capability)
+	if err != nil {
+		return nil, err
+	}
+	return r.listAgents(ctx, agentSelect+" WHERE capabilities @> ARRAY[$1]::text[] ORDER BY created_at, id", capability)
+}
+
+func (r *Repository) listAgents(ctx context.Context, query string, args ...any) ([]domain.Agent, error) {
+	rows, err := r.pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list agents: %w", err)
 	}

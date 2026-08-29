@@ -71,6 +71,10 @@ func (c *Cached) ListAgents(ctx context.Context) ([]domain.Agent, error) {
 	return c.inner.ListAgents(ctx)
 }
 
+func (c *Cached) ListAgentsByCapability(ctx context.Context, capability string) ([]domain.Agent, error) {
+	return c.inner.ListAgentsByCapability(ctx, capability)
+}
+
 func (c *Cached) CreateRun(ctx context.Context, run domain.Run, idempotencyKey string) (domain.Run, bool, error) {
 	created, isNew, err := c.inner.CreateRun(ctx, run, idempotencyKey)
 	if err != nil {
