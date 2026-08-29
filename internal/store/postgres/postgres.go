@@ -259,13 +259,17 @@ func (r *Repository) CreateRun(ctx context.Context, run domain.Run, idempotencyK
 	if idempotencyKey != "" {
 		key = idempotencyKey
 	}
+	requiredCapabilities := run.RequiredCapabilities
+	if requiredCapabilities == nil {
+		requiredCapabilities = []string{}
+	}
 	command, err := r.pool.Exec(ctx, `
 		INSERT INTO runs (
-			id, agent_id, input, output, status, error, attempt, max_attempts,
+			id, agent_id, required_capabilities, input, output, status, error, attempt, max_attempts,
 			request_id, duration_ms, idempotency_key, created_at, started_at, completed_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 		ON CONFLICT DO NOTHING`,
-		run.ID, run.AgentID, run.Input, run.Output, run.Status, run.Error, run.Attempt,
+		run.ID, run.AgentID, requiredCapabilities, run.Input, run.Output, run.Status, run.Error, run.Attempt,
 		run.MaxAttempts, run.RequestID, run.DurationMS, key, run.CreatedAt, run.StartedAt, run.CompletedAt,
 	)
 	if err != nil {
@@ -284,7 +288,7 @@ func (r *Repository) CreateRun(ctx context.Context, run domain.Run, idempotencyK
 	return existing, false, nil
 }
 
-const runSelect = `SELECT id, agent_id, input, output, status, error, attempt, max_attempts,
+const runSelect = `SELECT id, agent_id, required_capabilities, input, output, status, error, attempt, max_attempts,
 	request_id, duration_ms, created_at, started_at, completed_at FROM runs`
 
 func (r *Repository) GetRun(ctx context.Context, id string) (domain.Run, error) {
@@ -387,7 +391,7 @@ func (r *Repository) CancelRun(ctx context.Context, id string, at time.Time) (do
 		UPDATE runs SET status = 'canceled', output = '', error = '', completed_at = $2,
 			duration_ms = GREATEST(0, FLOOR(EXTRACT(EPOCH FROM ($2 - COALESCE(started_at, created_at))) * 1000)::BIGINT)
 		WHERE id = $1 AND status IN ('queued', 'running')
-		RETURNING id, agent_id, input, output, status, error, attempt, max_attempts,
+		RETURNING id, agent_id, required_capabilities, input, output, status, error, attempt, max_attempts,
 			request_id, duration_ms, created_at, started_at, completed_at`, id, at.UTC()))
 	if err == nil {
 		return run, nil
@@ -551,7 +555,7 @@ type rowScanner interface {
 func scanRun(row rowScanner) (domain.Run, error) {
 	var run domain.Run
 	err := row.Scan(
-		&run.ID, &run.AgentID, &run.Input, &run.Output, &run.Status, &run.Error,
+		&run.ID, &run.AgentID, &run.RequiredCapabilities, &run.Input, &run.Output, &run.Status, &run.Error,
 		&run.Attempt, &run.MaxAttempts, &run.RequestID, &run.DurationMS,
 		&run.CreatedAt, &run.StartedAt, &run.CompletedAt,
 	)

@@ -19,19 +19,20 @@ const (
 var ErrRunNotCancelable = errors.New("run cannot be canceled")
 
 type Run struct {
-	ID          string     `json:"id"`
-	AgentID     string     `json:"agent_id"`
-	Input       string     `json:"input"`
-	Output      string     `json:"output,omitempty"`
-	Status      RunStatus  `json:"status"`
-	Error       string     `json:"error,omitempty"`
-	Attempt     int        `json:"attempt"`
-	MaxAttempts int        `json:"max_attempts"`
-	RequestID   string     `json:"request_id,omitempty"`
-	DurationMS  int64      `json:"duration_ms"`
-	CreatedAt   time.Time  `json:"created_at"`
-	StartedAt   *time.Time `json:"started_at,omitempty"`
-	CompletedAt *time.Time `json:"completed_at,omitempty"`
+	ID                   string     `json:"id"`
+	AgentID              string     `json:"agent_id"`
+	RequiredCapabilities []string   `json:"required_capabilities,omitempty"`
+	Input                string     `json:"input"`
+	Output               string     `json:"output,omitempty"`
+	Status               RunStatus  `json:"status"`
+	Error                string     `json:"error,omitempty"`
+	Attempt              int        `json:"attempt"`
+	MaxAttempts          int        `json:"max_attempts"`
+	RequestID            string     `json:"request_id,omitempty"`
+	DurationMS           int64      `json:"duration_ms"`
+	CreatedAt            time.Time  `json:"created_at"`
+	StartedAt            *time.Time `json:"started_at,omitempty"`
+	CompletedAt          *time.Time `json:"completed_at,omitempty"`
 }
 
 func (r *Run) Start(at time.Time) error {
