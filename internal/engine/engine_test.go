@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -134,7 +135,7 @@ func TestEngineRetriesAfterAttemptTimeout(t *testing.T) {
 }
 
 func TestEngineRecoversRuntimePanicAndWorkerContinues(t *testing.T) {
-	var logOutput bytes.Buffer
+	var logOutput synchronizedBuffer
 	originalLogger := slog.Default()
 	slog.SetDefault(slog.New(slog.NewJSONHandler(&logOutput, nil)))
 	defer slog.SetDefault(originalLogger)
@@ -196,6 +197,23 @@ func TestEngineRecoversRuntimePanicAndWorkerContinues(t *testing.T) {
 			t.Fatalf("panic log is missing %s: %s", expected, logs)
 		}
 	}
+}
+
+type synchronizedBuffer struct {
+	mu     sync.Mutex
+	buffer bytes.Buffer
+}
+
+func (b *synchronizedBuffer) Write(payload []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buffer.Write(payload)
+}
+
+func (b *synchronizedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buffer.String()
 }
 
 func TestEngineCancelsQueuedRunBeforeExecution(t *testing.T) {
