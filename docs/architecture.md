@@ -62,9 +62,9 @@ Memory mode is the default. It uses a mutex-protected repository and bounded Go 
 
 Distributed mode is enabled with `AGENTMESH_MODE=distributed`:
 
-- PostgreSQL stores agents, run state, attempt counters, timestamps, and idempotency keys. Embedded, ordered SQL migrations run at startup.
+- PostgreSQL stores agents, run state, attempt counters, timestamps, idempotency keys, and bounded Run event history. Embedded, ordered SQL migrations run at startup.
 - NATS JetStream durably stores run work. A named stream and durable pull consumer use explicit acknowledgements. Executor failures are retried by the engine; exhausted runs are published to `agentmesh.runs.dlq` before being marked failed.
-- NATS core pub/sub transports Run events between replicas on one ordered subject. Each publisher delivers locally without waiting for subscribers and uses `NoEcho` so its own NATS subscription cannot duplicate that event. Remote callbacks feed the same bounded local bus used by SSE.
+- NATS core pub/sub transports live Run events between replicas on one ordered subject. Each event is assigned a stable `event_id` and persisted before live publication. `NoEcho` prevents a publisher's own NATS subscription from duplicating the event, while ID-based local deduplication protects replay/live overlap.
 - Redis caches agent and run reads and provides token-protected execution leases. The Engine renews an active lease every third of its TTL, so a context-aware Run can safely exceed the original lease duration. Memory leases implement the same ownership and expiration contract. Cache failures fall back to PostgreSQL, while coordination failures stop delivery and make readiness fail.
 
 Lease renewal is conservative: if renewal fails or ownership is lost, the Engine cancels the runtime context, emits `run.lease_lost`, does not finalize the Run, and returns an error so the queue can redeliver it. Renewal stops before lease release on every execution exit.
@@ -79,7 +79,9 @@ At startup, queued Runs are republished with their Run ID as the JetStream dedup
 
 Memory mode retains the original in-process event bus. Distributed mode implements the same `events.Broker` contract with NATS pub/sub. An SSE client connected to replica A receives lifecycle events published by a worker on replica B. NATS preserves a publisher's message order on the shared Run-events subject; the local bus preserves arrival order per Run.
 
-Subscriber channels are bounded and sends are non-blocking, so a slow SSE client cannot stall execution. Each replica retains at most 128 recent events per Run in memory. Core pub/sub intentionally adds no server-side history in this increment: events produced while a replica is disconnected are not replayed, and local history disappears on restart. Durable history, cross-restart replay, retention, and `Last-Event-ID` belong to the next event-persistence stage.
+Subscriber channels are bounded and sends are non-blocking, so a slow SSE client cannot stall execution. In distributed mode PostgreSQL retains the most recent `AGENTMESH_EVENT_HISTORY_LIMIT` events per Run and removes events older than `AGENTMESH_EVENT_RETENTION`. A fresh replica loads this ordered history and atomically merges it with events already received over NATS, deduplicating by `event_id`.
+
+SSE frames expose the stable event identity through the standard `id:` field and JSON `event_id`. Reconnection currently replays the configured bounded history from its beginning; request-side `Last-Event-ID` filtering is intentionally deferred, but the durable identity and ordering needed for it now exist. Persistence errors are logged and do not block local/NATS delivery, so the Run state remains authoritative if event storage is temporarily unavailable.
 
 ## Delivery guarantees
 

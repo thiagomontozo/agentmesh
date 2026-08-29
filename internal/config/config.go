@@ -8,22 +8,24 @@ import (
 )
 
 type Config struct {
-	Addr            string
-	Mode            string
-	Workers         int
-	QueueSize       int
-	ExecutionDelay  time.Duration
-	AttemptTimeout  time.Duration
-	ShutdownTimeout time.Duration
-	DatabaseURL     string
-	NATSURL         string
-	RedisURL        string
-	MaxAttempts     int
-	RetryInitial    time.Duration
-	RetryMax        time.Duration
-	NATSAckWait     time.Duration
-	CacheTTL        time.Duration
-	LeaseTTL        time.Duration
+	Addr              string
+	Mode              string
+	Workers           int
+	QueueSize         int
+	ExecutionDelay    time.Duration
+	AttemptTimeout    time.Duration
+	ShutdownTimeout   time.Duration
+	DatabaseURL       string
+	NATSURL           string
+	RedisURL          string
+	MaxAttempts       int
+	RetryInitial      time.Duration
+	RetryMax          time.Duration
+	NATSAckWait       time.Duration
+	CacheTTL          time.Duration
+	LeaseTTL          time.Duration
+	EventRetention    time.Duration
+	EventHistoryLimit int
 }
 
 func Load() (Config, error) {
@@ -102,6 +104,20 @@ func Load() (Config, error) {
 	if leaseTTL <= 0 {
 		return Config{}, fmt.Errorf("AGENTMESH_LEASE_TTL must be > 0")
 	}
+	eventRetention, err := durationEnv("AGENTMESH_EVENT_RETENTION", 7*24*time.Hour)
+	if err != nil {
+		return Config{}, err
+	}
+	if eventRetention <= 0 {
+		return Config{}, fmt.Errorf("AGENTMESH_EVENT_RETENTION must be > 0")
+	}
+	eventHistoryLimit, err := intEnv("AGENTMESH_EVENT_HISTORY_LIMIT", 1000)
+	if err != nil {
+		return Config{}, err
+	}
+	if eventHistoryLimit < 1 {
+		return Config{}, fmt.Errorf("AGENTMESH_EVENT_HISTORY_LIMIT must be >= 1")
+	}
 
 	databaseURL := stringEnv("AGENTMESH_DATABASE_URL", "")
 	natsURL := stringEnv("AGENTMESH_NATS_URL", "")
@@ -111,22 +127,24 @@ func Load() (Config, error) {
 	}
 
 	return Config{
-		Addr:            stringEnv("AGENTMESH_ADDR", ":8080"),
-		Mode:            mode,
-		Workers:         workers,
-		QueueSize:       queueSize,
-		ExecutionDelay:  executionDelay,
-		AttemptTimeout:  attemptTimeout,
-		ShutdownTimeout: shutdownTimeout,
-		DatabaseURL:     databaseURL,
-		NATSURL:         natsURL,
-		RedisURL:        redisURL,
-		MaxAttempts:     maxAttempts,
-		RetryInitial:    retryInitial,
-		RetryMax:        retryMax,
-		NATSAckWait:     natsAckWait,
-		CacheTTL:        cacheTTL,
-		LeaseTTL:        leaseTTL,
+		Addr:              stringEnv("AGENTMESH_ADDR", ":8080"),
+		Mode:              mode,
+		Workers:           workers,
+		QueueSize:         queueSize,
+		ExecutionDelay:    executionDelay,
+		AttemptTimeout:    attemptTimeout,
+		ShutdownTimeout:   shutdownTimeout,
+		DatabaseURL:       databaseURL,
+		NATSURL:           natsURL,
+		RedisURL:          redisURL,
+		MaxAttempts:       maxAttempts,
+		RetryInitial:      retryInitial,
+		RetryMax:          retryMax,
+		NATSAckWait:       natsAckWait,
+		CacheTTL:          cacheTTL,
+		LeaseTTL:          leaseTTL,
+		EventRetention:    eventRetention,
+		EventHistoryLimit: eventHistoryLimit,
 	}, nil
 }
 

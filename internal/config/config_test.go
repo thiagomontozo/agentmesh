@@ -21,6 +21,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.MaxAttempts != 3 || cfg.RetryInitial != 250*time.Millisecond || cfg.RetryMax != 5*time.Second {
 		t.Fatalf("unexpected retry defaults: %+v", cfg)
 	}
+	if cfg.EventRetention != 7*24*time.Hour || cfg.EventHistoryLimit != 1000 {
+		t.Fatalf("unexpected event history defaults: %+v", cfg)
+	}
 }
 
 func TestLoadRejectsInvalidValues(t *testing.T) {
@@ -43,6 +46,8 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 		{name: "cache ttl is zero", key: "AGENTMESH_CACHE_TTL", value: "0s"},
 		{name: "ack wait is zero", key: "AGENTMESH_NATS_ACK_WAIT", value: "0s"},
 		{name: "lease ttl is zero", key: "AGENTMESH_LEASE_TTL", value: "0s"},
+		{name: "event retention is zero", key: "AGENTMESH_EVENT_RETENTION", value: "0s"},
+		{name: "event history limit is zero", key: "AGENTMESH_EVENT_HISTORY_LIMIT", value: "0"},
 	}
 
 	for _, test := range tests {
@@ -107,6 +112,8 @@ func clearEnvironment(t *testing.T) {
 		"AGENTMESH_NATS_ACK_WAIT",
 		"AGENTMESH_CACHE_TTL",
 		"AGENTMESH_LEASE_TTL",
+		"AGENTMESH_EVENT_RETENTION",
+		"AGENTMESH_EVENT_HISTORY_LIMIT",
 	} {
 		t.Setenv(key, "")
 	}

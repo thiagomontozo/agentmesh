@@ -181,7 +181,7 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 	}
 	run = createdRun
 	s.events.Publish(domain.RunEvent{
-		RunID: run.ID, Type: "run.queued", Message: "run queued", Timestamp: time.Now().UTC(),
+		RunID: run.ID, Type: "run.queued", Message: "run queued", Attempt: run.Attempt, Timestamp: time.Now().UTC(),
 	})
 
 	if err := s.engine.Enqueue(r.Context(), run.ID); err != nil {
@@ -194,7 +194,7 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.events.Publish(domain.RunEvent{
-			RunID: run.ID, Type: "run.failed", Message: err.Error(), Timestamp: time.Now().UTC(),
+			RunID: run.ID, Type: "run.failed", Message: err.Error(), Attempt: run.Attempt, Timestamp: time.Now().UTC(),
 		})
 		writeError(w, http.StatusServiceUnavailable, err.Error())
 		return
@@ -274,7 +274,7 @@ func (s *Server) runEvents(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				return
 			}
-			_, _ = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event.Type, payload)
+			_, _ = fmt.Fprintf(w, "id: %s\nevent: %s\ndata: %s\n\n", event.ID, event.Type, payload)
 			flusher.Flush()
 			if event.Type == "run.succeeded" || event.Type == "run.failed" || event.Type == "run.canceled" {
 				return

@@ -31,6 +31,7 @@
 - [x] Monotonic execution fencing enforced by Run persistence
 - [x] Lease-aware, fenced multi-replica Run recovery
 - [x] Cross-replica Run event bus and SSE over NATS pub/sub
+- [x] Bounded PostgreSQL Run event history and cross-restart SSE replay
 - [ ] LLM provider interface
 - [ ] OpenAI-compatible provider
 - [ ] MCP client and tool registry

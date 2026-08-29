@@ -35,8 +35,14 @@ type RunRepository interface {
 	RecoverRun(ctx context.Context, id string, minimumFence int64) (bool, error)
 }
 
+type EventRepository interface {
+	AppendRunEvent(ctx context.Context, event domain.RunEvent, retention time.Duration, maxPerRun int) error
+	ListRunEvents(ctx context.Context, runID string, limit int) ([]domain.RunEvent, error)
+}
+
 type Repository interface {
 	AgentRepository
 	RunRepository
+	EventRepository
 	Ping(ctx context.Context) error
 }

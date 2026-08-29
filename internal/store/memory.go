@@ -18,6 +18,7 @@ type Memory struct {
 	agents          map[string]domain.Agent
 	runs            map[string]domain.Run
 	runFences       map[string]int64
+	runEvents       map[string][]domain.RunEvent
 	idempotencyKeys map[string]string
 }
 
@@ -28,8 +29,44 @@ func NewMemory() *Memory {
 		agents:          make(map[string]domain.Agent),
 		runs:            make(map[string]domain.Run),
 		runFences:       make(map[string]int64),
+		runEvents:       make(map[string][]domain.RunEvent),
 		idempotencyKeys: make(map[string]string),
 	}
+}
+
+func (m *Memory) AppendRunEvent(_ context.Context, event domain.RunEvent, retention time.Duration, maxPerRun int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.runs[event.RunID]; !ok {
+		return ErrNotFound
+	}
+	events := append(m.runEvents[event.RunID], event)
+	if retention > 0 {
+		cutoff := time.Now().UTC().Add(-retention)
+		first := 0
+		for first < len(events) && events[first].Timestamp.Before(cutoff) {
+			first++
+		}
+		events = events[first:]
+	}
+	if maxPerRun > 0 && len(events) > maxPerRun {
+		events = events[len(events)-maxPerRun:]
+	}
+	m.runEvents[event.RunID] = append([]domain.RunEvent(nil), events...)
+	return nil
+}
+
+func (m *Memory) ListRunEvents(_ context.Context, runID string, limit int) ([]domain.RunEvent, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if _, ok := m.runs[runID]; !ok {
+		return nil, ErrNotFound
+	}
+	events := m.runEvents[runID]
+	if limit > 0 && len(events) > limit {
+		events = events[len(events)-limit:]
+	}
+	return append([]domain.RunEvent(nil), events...), nil
 }
 
 func (m *Memory) CreateAgent(_ context.Context, agent domain.Agent) (domain.Agent, error) {

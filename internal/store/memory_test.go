@@ -197,3 +197,36 @@ func TestMemoryCreateRunIsIdempotent(t *testing.T) {
 		t.Fatalf("unexpected replay: run=%+v new=%v err=%v", replayed, isNew, err)
 	}
 }
+
+func TestMemoryPersistsBoundedRunEventHistory(t *testing.T) {
+	ctx := context.Background()
+	memory := NewMemory()
+	run := domain.Run{ID: "run_events", Status: domain.RunQueued}
+	if _, _, err := memory.CreateRun(ctx, run, ""); err != nil {
+		t.Fatal(err)
+	}
+	for index, eventType := range []string{"run.queued", "run.started", "run.succeeded"} {
+		event := domain.RunEvent{
+			ID: eventType, RunID: run.ID, Type: eventType, Attempt: index,
+			Timestamp: time.Now().UTC().Add(time.Duration(index) * time.Millisecond),
+		}
+		if err := memory.AppendRunEvent(ctx, event, time.Hour, 2); err != nil {
+			t.Fatal(err)
+		}
+	}
+	events, err := memory.ListRunEvents(ctx, run.ID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 2 || events[0].Type != "run.started" || events[1].Type != "run.succeeded" || events[1].Attempt != 2 {
+		t.Fatalf("unexpected event history: %+v", events)
+	}
+}
+
+func TestMemoryRunEventHistoryRejectsMissingRun(t *testing.T) {
+	memory := NewMemory()
+	event := domain.RunEvent{ID: "evt_1", RunID: "missing", Type: "run.queued", Timestamp: time.Now().UTC()}
+	if err := memory.AppendRunEvent(context.Background(), event, time.Hour, 10); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound, got %v", err)
+	}
+}

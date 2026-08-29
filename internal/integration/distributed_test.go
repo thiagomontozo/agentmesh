@@ -221,7 +221,7 @@ func TestDistributedRunLifecycleAndIdempotency(t *testing.T) {
 		t.Fatalf("recovered PostgreSQL Run accepted crashed owner: %v", err)
 	}
 	testRedisLeaseRenewal(t, ctx, redisCache, "integration:"+suffix)
-	testDistributedEventBus(t, natsURL, "run_events_"+suffix)
+	testDistributedEventBus(t, natsURL, repository, agent.ID, "run_events_"+suffix)
 	testDistributedSSE(t, natsURL, repository, runEngine, agent.ID, suffix)
 }
 
@@ -241,12 +241,12 @@ func testDistributedSSE(
 	if _, _, err := repository.CreateRun(context.Background(), run, ""); err != nil {
 		t.Fatal(err)
 	}
-	busA, err := events.NewNATS(natsURL)
+	busA, err := events.NewPersistentNATS(natsURL, repository, time.Hour, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = busA.Close() }()
-	busB, err := events.NewNATS(natsURL)
+	busB, err := events.NewPersistentNATS(natsURL, repository, time.Hour, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -269,19 +269,27 @@ func testDistributedSSE(
 		t.Fatal("SSE replica A did not receive terminal event from replica B")
 	}
 	body := response.Body.String()
-	if response.Code != http.StatusOK || !strings.Contains(body, "event: run.succeeded") || !strings.Contains(body, run.ID) {
+	if response.Code != http.StatusOK || !strings.Contains(body, "id: evt_") || !strings.Contains(body, "event: run.succeeded") || !strings.Contains(body, run.ID) {
 		t.Fatalf("unexpected distributed SSE response: status=%d body=%s", response.Code, body)
 	}
 }
 
-func testDistributedEventBus(t *testing.T, natsURL, runID string) {
+func testDistributedEventBus(t *testing.T, natsURL string, repository store.Repository, agentID, runID string) {
 	t.Helper()
-	busA, err := events.NewNATS(natsURL)
+	for _, id := range []string{runID, runID + "_slow"} {
+		if _, _, err := repository.CreateRun(context.Background(), domain.Run{
+			ID: id, AgentID: agentID, Input: "events", Status: domain.RunQueued,
+			MaxAttempts: 1, CreatedAt: time.Now().UTC(),
+		}, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	busA, err := events.NewPersistentNATS(natsURL, repository, time.Hour, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = busA.Close() }()
-	busB, err := events.NewNATS(natsURL)
+	busB, err := events.NewPersistentNATS(natsURL, repository, time.Hour, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -298,8 +306,11 @@ func testDistributedEventBus(t *testing.T, natsURL, runID string) {
 		})
 	}
 	for _, wantType := range wantTypes {
-		assertDistributedEvent(t, received, runID, wantType)
-		assertDistributedEvent(t, local, runID, wantType)
+		remoteEvent := assertDistributedEvent(t, received, runID, wantType)
+		localEvent := assertDistributedEvent(t, local, runID, wantType)
+		if remoteEvent.ID == "" || remoteEvent.ID != localEvent.ID {
+			t.Fatalf("event identity was not preserved across replicas: remote=%+v local=%+v", remoteEvent, localEvent)
+		}
 	}
 	select {
 	case duplicate := <-received:
@@ -311,6 +322,17 @@ func testDistributedEventBus(t *testing.T, natsURL, runID string) {
 	defer unsubscribeReplay()
 	for _, wantType := range wantTypes {
 		assertDistributedEvent(t, replay, runID, wantType)
+	}
+
+	busC, err := events.NewPersistentNATS(natsURL, repository, time.Hour, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = busC.Close() }()
+	persistedReplay, unsubscribePersisted := busC.Subscribe(runID)
+	defer unsubscribePersisted()
+	for _, wantType := range wantTypes {
+		assertDistributedEvent(t, persistedReplay, runID, wantType)
 	}
 
 	slowRunID := runID + "_slow"
@@ -327,16 +349,21 @@ func testDistributedEventBus(t *testing.T, natsURL, runID string) {
 	}
 }
 
-func assertDistributedEvent(t *testing.T, channel <-chan domain.RunEvent, runID, eventType string) {
+func assertDistributedEvent(t *testing.T, channel <-chan domain.RunEvent, runID, eventType string) domain.RunEvent {
 	t.Helper()
 	select {
 	case event := <-channel:
 		if event.RunID != runID || event.Type != eventType {
 			t.Fatalf("unexpected distributed event: got=%+v want_run=%s want_type=%s", event, runID, eventType)
 		}
+		if event.ID == "" || event.Timestamp.IsZero() {
+			t.Fatalf("distributed event lacks durable identity: %+v", event)
+		}
+		return event
 	case <-time.After(2 * time.Second):
 		t.Fatalf("timed out waiting for distributed event %s", eventType)
 	}
+	return domain.RunEvent{}
 }
 
 func testRedisLeaseRenewal(t *testing.T, ctx context.Context, coordinator coordination.Coordinator, key string) {

@@ -20,12 +20,32 @@ func TestSubscribeReplaysHistoryAndReceivesLiveEvents(t *testing.T) {
 	for _, want := range []domain.RunEvent{historical, live} {
 		select {
 		case got := <-events:
-			if got != want {
+			if got.RunID != want.RunID || got.Type != want.Type || got.ID == "" || got.Timestamp.IsZero() {
 				t.Fatalf("expected %+v, got %+v", want, got)
 			}
 		case <-time.After(time.Second):
 			t.Fatalf("timed out waiting for %s", want.Type)
 		}
+	}
+}
+
+func TestSubscribeMergesPersistentAndLocalHistoryWithoutDuplicates(t *testing.T) {
+	bus := NewBusWithHistoryLimit(4)
+	first := domain.RunEvent{ID: "evt_1", RunID: "run_1", Type: "run.queued", Timestamp: time.Unix(1, 0)}
+	second := domain.RunEvent{ID: "evt_2", RunID: "run_1", Type: "run.started", Timestamp: time.Unix(2, 0)}
+	bus.Publish(second)
+	events, unsubscribe := bus.SubscribeWithHistory("run_1", []domain.RunEvent{first, second})
+	defer unsubscribe()
+	for _, want := range []string{"evt_1", "evt_2"} {
+		if got := <-events; got.ID != want {
+			t.Fatalf("expected %s, got %+v", want, got)
+		}
+	}
+	bus.Publish(second)
+	select {
+	case duplicate := <-events:
+		t.Fatalf("received duplicate event: %+v", duplicate)
+	case <-time.After(20 * time.Millisecond):
 	}
 }
 
