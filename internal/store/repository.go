@@ -44,6 +44,7 @@ type RunRepository interface {
 	UpdateRunFenced(ctx context.Context, run domain.Run, fence int64) error
 	CancelRun(ctx context.Context, id string, at time.Time) (domain.Run, error)
 	ListRuns(ctx context.Context) ([]domain.Run, error)
+	ListChildRuns(ctx context.Context, parentRunID string) ([]domain.Run, error)
 	CountActiveRunsByAgent(ctx context.Context, agentIDs []string) (map[string]int, error)
 	ListPendingRuns(ctx context.Context) ([]PendingRun, error)
 	RecoverRun(ctx context.Context, id string, minimumFence int64) (bool, error)

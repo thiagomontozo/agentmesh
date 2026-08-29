@@ -48,6 +48,7 @@
 - [x] Deterministic capability Router V1 with health-aware fallback
 - [x] Load-aware Router ranking with declared capacity and priority
 - [x] Semantic/LLM Router architectural analysis (no implementation)
+- [x] Immutable parent/root Run lineage and direct-child queries
 - [ ] Authentication
 - [ ] RBAC
 - [ ] Audit log

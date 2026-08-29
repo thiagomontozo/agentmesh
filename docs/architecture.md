@@ -125,6 +125,16 @@ The Router remains deterministic and declared-input-only: it does not inspect na
 
 Semantic routing remains analysis-only. The comparison, security constraints, evaluation gates, and recommended gated hybrid are documented in [Semantic / LLM Router Analysis](semantic-router-analysis.md).
 
+## Parent and child Runs
+
+A Run may optionally reference one immutable `parent_run_id`. AgentMesh derives `root_run_id` from the existing parent: direct children use the parent's ID, and deeper descendants inherit the parent's root. Top-level Runs retain empty lineage fields, preserving all existing JSON and persistence behavior.
+
+Memory and PostgreSQL validate the relationship on creation. PostgreSQL adds self-referential foreign keys, shape/self-reference checks, and indexes for direct-child and root lookup. Since a parent must already exist and lineage is never updated, every edge points to an older Run and cycles cannot be constructed; domain checks also reject direct self-parent/root cases and corrupt inherited lineage.
+
+`GET /api/v1/runs/{id}/children` returns direct children only, ordered by creation time and ID. Creation emits a lineage-bearing `run.queued` event on the child and `run.child_queued` on the parent. Subsequent Engine lifecycle events retain the child's parent/root fields, and distributed PostgreSQL event history persists them.
+
+This is composition groundwork, not a workflow engine. Parent completion does not trigger children, outputs are not propagated, failure/cancellation does not cascade, and there are no dependencies, DAG scheduling, fan-out/fan-in, conditions, or cycle traversal.
+
 ## Agent Registry lifecycle
 
 Agent definitions have immutable `id` and `created_at`, mutable execution metadata, `updated_at`, and a monotonic `version`. `PUT` performs a validated full replacement, while Memory and PostgreSQL compare the supplied version atomically before incrementing it. API mutations require a strong numeric `If-Match`, so concurrent writers cannot silently overwrite each other. Redis is refreshed after success and invalidated after conflicts to avoid retaining stale versions.

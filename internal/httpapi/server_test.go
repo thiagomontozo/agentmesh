@@ -433,6 +433,99 @@ func TestLoadRoutingReturns429ButIdempotentReplayBypassesRerouting(t *testing.T)
 	}
 }
 
+func TestCreateAndQueryParentChildRunsWithLineageEvents(t *testing.T) {
+	server, _ := newTestServer(t)
+	if _, err := server.store.CreateAgent(context.Background(), domain.Agent{ID: "agt_lineage", Name: "Lineage"}); err != nil {
+		t.Fatal(err)
+	}
+	create := func(body, key string) domain.Run {
+		t.Helper()
+		request := httptest.NewRequest(http.MethodPost, "/api/v1/runs", strings.NewReader(body))
+		if key != "" {
+			request.Header.Set("Idempotency-Key", key)
+		}
+		response := httptest.NewRecorder()
+		server.Handler().ServeHTTP(response, request)
+		if response.Code != http.StatusAccepted {
+			t.Fatalf("create Run failed: %d %s", response.Code, response.Body.String())
+		}
+		var run domain.Run
+		if err := json.Unmarshal(response.Body.Bytes(), &run); err != nil {
+			t.Fatal(err)
+		}
+		return run
+	}
+
+	root := create(`{"agent_id":"agt_lineage","input":"root"}`, "")
+	child := create(`{"agent_id":"agt_lineage","parent_run_id":"`+root.ID+`","input":"child"}`, "child-key")
+	if child.ParentRunID != root.ID || child.RootRunID != root.ID {
+		t.Fatalf("unexpected direct child lineage: %+v", child)
+	}
+	grandchild := create(`{"agent_id":"agt_lineage","parent_run_id":"`+child.ID+`","input":"grandchild"}`, "")
+	if grandchild.ParentRunID != child.ID || grandchild.RootRunID != root.ID {
+		t.Fatalf("unexpected grandchild lineage: %+v", grandchild)
+	}
+
+	childrenRequest := httptest.NewRequest(http.MethodGet, "/api/v1/runs/"+root.ID+"/children", nil)
+	childrenResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(childrenResponse, childrenRequest)
+	if childrenResponse.Code != http.StatusOK || !strings.Contains(childrenResponse.Body.String(), child.ID) ||
+		strings.Contains(childrenResponse.Body.String(), grandchild.ID) {
+		t.Fatalf("unexpected direct children response: %d %s", childrenResponse.Code, childrenResponse.Body.String())
+	}
+
+	rootEvents, unsubscribeRoot := server.events.Subscribe(root.ID)
+	defer unsubscribeRoot()
+	foundParentEvent := false
+	for !foundParentEvent {
+		select {
+		case event := <-rootEvents:
+			foundParentEvent = event.Type == "run.child_queued" && event.ChildRunID == child.ID &&
+				event.ParentRunID == root.ID && event.RootRunID == root.ID
+		case <-time.After(time.Second):
+			t.Fatal("parent stream did not record child Run creation")
+		}
+	}
+
+	childEvents, unsubscribeChild := server.events.Subscribe(child.ID)
+	defer unsubscribeChild()
+	foundQueuedLineage := false
+	for !foundQueuedLineage {
+		select {
+		case event := <-childEvents:
+			foundQueuedLineage = event.Type == "run.queued" && event.ParentRunID == root.ID && event.RootRunID == root.ID
+		case <-time.After(time.Second):
+			t.Fatal("child stream did not retain lineage")
+		}
+	}
+
+	otherRoot := create(`{"agent_id":"agt_lineage","input":"other root"}`, "")
+	conflict := httptest.NewRequest(http.MethodPost, "/api/v1/runs", strings.NewReader(
+		`{"agent_id":"agt_lineage","parent_run_id":"`+otherRoot.ID+`","input":"child"}`,
+	))
+	conflict.Header.Set("Idempotency-Key", "child-key")
+	conflictResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(conflictResponse, conflict)
+	if conflictResponse.Code != http.StatusConflict {
+		t.Fatalf("expected lineage-aware idempotency conflict: %d %s", conflictResponse.Code, conflictResponse.Body.String())
+	}
+
+	missingParent := httptest.NewRequest(http.MethodPost, "/api/v1/runs", strings.NewReader(
+		`{"agent_id":"agt_lineage","parent_run_id":"run_missing","input":"missing"}`,
+	))
+	missingParentResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(missingParentResponse, missingParent)
+	if missingParentResponse.Code != http.StatusNotFound {
+		t.Fatalf("expected missing parent 404: %d %s", missingParentResponse.Code, missingParentResponse.Body.String())
+	}
+	missingChildren := httptest.NewRequest(http.MethodGet, "/api/v1/runs/run_missing/children", nil)
+	missingChildrenResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(missingChildrenResponse, missingChildren)
+	if missingChildrenResponse.Code != http.StatusNotFound {
+		t.Fatalf("expected missing children parent 404: %d %s", missingChildrenResponse.Code, missingChildrenResponse.Body.String())
+	}
+}
+
 func TestAgentUpdateDeleteAndConcurrencyAPI(t *testing.T) {
 	server, _ := newTestServer(t)
 	health := &recordingAgentHealth{}

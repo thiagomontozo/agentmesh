@@ -66,3 +66,40 @@ func TestRunRejectsCancelFromTerminalState(t *testing.T) {
 		}
 	}
 }
+
+func TestRunAttachToBuildsRootedLineage(t *testing.T) {
+	root := Run{ID: "run_root"}
+	child := Run{ID: "run_child"}
+	if err := child.AttachTo(root); err != nil {
+		t.Fatal(err)
+	}
+	if child.ParentRunID != root.ID || child.RootRunID != root.ID {
+		t.Fatalf("unexpected direct child lineage: %+v", child)
+	}
+	grandchild := Run{ID: "run_grandchild"}
+	if err := grandchild.AttachTo(child); err != nil {
+		t.Fatal(err)
+	}
+	if grandchild.ParentRunID != child.ID || grandchild.RootRunID != root.ID {
+		t.Fatalf("unexpected grandchild lineage: %+v", grandchild)
+	}
+}
+
+func TestRunAttachToRejectsTrivialCyclesAndInvalidLineage(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		run    Run
+		parent Run
+	}{
+		{name: "self parent", run: Run{ID: "run_1"}, parent: Run{ID: "run_1"}},
+		{name: "self root", run: Run{ID: "run_1"}, parent: Run{ID: "run_parent", ParentRunID: "run_x", RootRunID: "run_1"}},
+		{name: "missing inherited root", run: Run{ID: "run_1"}, parent: Run{ID: "run_parent", ParentRunID: "run_x"}},
+		{name: "root parent declares root", run: Run{ID: "run_1"}, parent: Run{ID: "run_parent", RootRunID: "run_other"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if err := test.run.AttachTo(test.parent); err == nil {
+				t.Fatal("expected invalid lineage rejection")
+			}
+		})
+	}
+}

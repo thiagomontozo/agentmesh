@@ -21,6 +21,8 @@ var ErrRunNotCancelable = errors.New("run cannot be canceled")
 type Run struct {
 	ID                   string     `json:"id"`
 	AgentID              string     `json:"agent_id"`
+	ParentRunID          string     `json:"parent_run_id,omitempty"`
+	RootRunID            string     `json:"root_run_id,omitempty"`
 	RequiredCapabilities []string   `json:"required_capabilities,omitempty"`
 	Input                string     `json:"input"`
 	Output               string     `json:"output,omitempty"`
@@ -33,6 +35,35 @@ type Run struct {
 	CreatedAt            time.Time  `json:"created_at"`
 	StartedAt            *time.Time `json:"started_at,omitempty"`
 	CompletedAt          *time.Time `json:"completed_at,omitempty"`
+}
+
+// AttachTo assigns immutable lineage from an already-existing parent. Root
+// Runs keep both lineage fields empty; descendants always point at the top root.
+func (r *Run) AttachTo(parent Run) error {
+	if r.ID == "" {
+		return fmt.Errorf("run id is required before assigning a parent")
+	}
+	if parent.ID == "" {
+		return fmt.Errorf("parent run id is required")
+	}
+	if parent.ID == r.ID {
+		return fmt.Errorf("run cannot be its own parent")
+	}
+	rootID := parent.RootRunID
+	if parent.ParentRunID == "" {
+		if parent.RootRunID != "" {
+			return fmt.Errorf("root parent cannot declare root_run_id")
+		}
+		rootID = parent.ID
+	} else if rootID == "" {
+		return fmt.Errorf("parent run lineage is incomplete")
+	}
+	if rootID == r.ID {
+		return fmt.Errorf("run cannot be its own root")
+	}
+	r.ParentRunID = parent.ID
+	r.RootRunID = rootID
+	return nil
 }
 
 func (r *Run) Start(at time.Time) error {
@@ -114,10 +145,13 @@ func (r Run) durationMilliseconds(completedAt time.Time) int64 {
 }
 
 type RunEvent struct {
-	ID        string    `json:"event_id"`
-	RunID     string    `json:"run_id"`
-	Type      string    `json:"type"`
-	Message   string    `json:"message"`
-	Attempt   int       `json:"attempt,omitempty"`
-	Timestamp time.Time `json:"timestamp"`
+	ID          string    `json:"event_id"`
+	RunID       string    `json:"run_id"`
+	ChildRunID  string    `json:"child_run_id,omitempty"`
+	ParentRunID string    `json:"parent_run_id,omitempty"`
+	RootRunID   string    `json:"root_run_id,omitempty"`
+	Type        string    `json:"type"`
+	Message     string    `json:"message"`
+	Attempt     int       `json:"attempt,omitempty"`
+	Timestamp   time.Time `json:"timestamp"`
 }

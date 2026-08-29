@@ -125,6 +125,28 @@ curl -i -X POST http://localhost:8080/api/v1/runs \
 
 The router does not infer requirements from `input`, use an LLM, or replace direct `agent_id` selection.
 
+Create a child Run by referencing an existing parent:
+
+```bash
+curl -i -X POST http://localhost:8080/api/v1/runs \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "agent_id":"agt_REPLACE_ME",
+    "parent_run_id":"run_PARENT",
+    "input":"Review the parent result."
+  }'
+```
+
+`parent_run_id` is optional and can be combined with either explicit Agent selection or capability routing. AgentMesh derives `root_run_id`: a direct child points to its parent as root, while deeper descendants inherit the original root. Clients cannot supply or mutate `root_run_id`. Missing parents return `404`; changing the parent while replaying an idempotency key returns `409`.
+
+List direct children in deterministic creation order:
+
+```bash
+curl http://localhost:8080/api/v1/runs/run_PARENT/children
+```
+
+The endpoint does not recursively return grandchildren. A parent stream receives `run.child_queued` containing `child_run_id`, and child lifecycle events carry `parent_run_id` and `root_run_id`.
+
 Run status progresses through `queued`, `running`, and a terminal state: `succeeded`, `failed`, or `canceled`. The response includes `request_id`, `attempt`, `max_attempts`, lifecycle timestamps, and `duration_ms`. Duration is explicit after a terminal transition and measures execution time from `started_at`, or total queued lifetime if execution never started.
 
 ```bash

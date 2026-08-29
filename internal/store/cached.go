@@ -151,6 +151,10 @@ func (c *Cached) ListRuns(ctx context.Context) ([]domain.Run, error) {
 	return c.inner.ListRuns(ctx)
 }
 
+func (c *Cached) ListChildRuns(ctx context.Context, parentRunID string) ([]domain.Run, error) {
+	return c.inner.ListChildRuns(ctx, parentRunID)
+}
+
 func (c *Cached) CountActiveRunsByAgent(ctx context.Context, agentIDs []string) (map[string]int, error) {
 	return c.inner.CountActiveRunsByAgent(ctx, agentIDs)
 }

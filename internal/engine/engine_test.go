@@ -43,6 +43,45 @@ func TestEngineCompletesRun(t *testing.T) {
 	}
 }
 
+func TestEngineLifecycleEventsPreserveRunLineage(t *testing.T) {
+	memory, _, bus, runEngine := newEngineTestWithPolicy(t, executorFunc(func(context.Context, domain.Agent, string) (string, error) {
+		return "done", nil
+	}), testRetryPolicy(1))
+	ctx := context.Background()
+	if _, err := memory.CreateAgent(ctx, domain.Agent{ID: "agt_lineage", Name: "lineage"}); err != nil {
+		t.Fatal(err)
+	}
+	root := domain.Run{ID: "run_root", AgentID: "agt_lineage", Status: domain.RunSucceeded, MaxAttempts: 1}
+	if _, _, err := memory.CreateRun(ctx, root, ""); err != nil {
+		t.Fatal(err)
+	}
+	child := domain.Run{
+		ID: "run_child", AgentID: "agt_lineage", ParentRunID: root.ID,
+		Input: "child", Status: domain.RunQueued, MaxAttempts: 1,
+	}
+	created, _, err := memory.CreateRun(ctx, child, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runEngine.Enqueue(ctx, created.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitForStatus(t, memory, created.ID, domain.RunSucceeded)
+
+	eventChannel, unsubscribe := bus.Subscribe(created.ID)
+	defer unsubscribe()
+	for _, eventType := range []string{"run.started", "run.succeeded"} {
+		select {
+		case event := <-eventChannel:
+			if event.Type != eventType || event.ParentRunID != root.ID || event.RootRunID != root.ID {
+				t.Fatalf("lineage missing from %s event: %+v", eventType, event)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("timed out waiting for %s", eventType)
+		}
+	}
+}
+
 func TestEngineProvidesAttemptDeadlineToFastRuntime(t *testing.T) {
 	remaining := make(chan time.Duration, 1)
 	executor := executorFunc(func(ctx context.Context, _ domain.Agent, _ string) (string, error) {

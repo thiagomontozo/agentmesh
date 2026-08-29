@@ -258,6 +258,23 @@ func (r *Repository) DeleteAgent(ctx context.Context, id string, expectedVersion
 }
 
 func (r *Repository) CreateRun(ctx context.Context, run domain.Run, idempotencyKey string) (domain.Run, bool, error) {
+	if run.ParentRunID == "" {
+		if run.RootRunID != "" {
+			return domain.Run{}, false, fmt.Errorf("root Run cannot declare root_run_id")
+		}
+	} else {
+		parent, err := r.GetRun(ctx, run.ParentRunID)
+		if err != nil {
+			return domain.Run{}, false, fmt.Errorf("load parent Run: %w", err)
+		}
+		providedRoot := run.RootRunID
+		if err := run.AttachTo(parent); err != nil {
+			return domain.Run{}, false, err
+		}
+		if providedRoot != "" && providedRoot != run.RootRunID {
+			return domain.Run{}, false, fmt.Errorf("root_run_id does not match parent lineage")
+		}
+	}
 	var key any
 	if idempotencyKey != "" {
 		key = idempotencyKey
@@ -268,11 +285,13 @@ func (r *Repository) CreateRun(ctx context.Context, run domain.Run, idempotencyK
 	}
 	command, err := r.pool.Exec(ctx, `
 		INSERT INTO runs (
-			id, agent_id, required_capabilities, input, output, status, error, attempt, max_attempts,
+			id, agent_id, parent_run_id, root_run_id, required_capabilities,
+			input, output, status, error, attempt, max_attempts,
 			request_id, duration_ms, idempotency_key, created_at, started_at, completed_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
 		ON CONFLICT DO NOTHING`,
-		run.ID, run.AgentID, requiredCapabilities, run.Input, run.Output, run.Status, run.Error, run.Attempt,
+		run.ID, run.AgentID, nullableString(run.ParentRunID), nullableString(run.RootRunID), requiredCapabilities,
+		run.Input, run.Output, run.Status, run.Error, run.Attempt,
 		run.MaxAttempts, run.RequestID, run.DurationMS, key, run.CreatedAt, run.StartedAt, run.CompletedAt,
 	)
 	if err != nil {
@@ -291,7 +310,8 @@ func (r *Repository) CreateRun(ctx context.Context, run domain.Run, idempotencyK
 	return existing, false, nil
 }
 
-const runSelect = `SELECT id, agent_id, required_capabilities, input, output, status, error, attempt, max_attempts,
+const runSelect = `SELECT id, agent_id, COALESCE(parent_run_id, ''), COALESCE(root_run_id, ''),
+	required_capabilities, input, output, status, error, attempt, max_attempts,
 	request_id, duration_ms, created_at, started_at, completed_at FROM runs`
 
 func (r *Repository) GetRun(ctx context.Context, id string) (domain.Run, error) {
@@ -405,7 +425,8 @@ func (r *Repository) CancelRun(ctx context.Context, id string, at time.Time) (do
 		UPDATE runs SET status = 'canceled', output = '', error = '', completed_at = $2,
 			duration_ms = GREATEST(0, FLOOR(EXTRACT(EPOCH FROM ($2 - COALESCE(started_at, created_at))) * 1000)::BIGINT)
 		WHERE id = $1 AND status IN ('queued', 'running')
-		RETURNING id, agent_id, required_capabilities, input, output, status, error, attempt, max_attempts,
+		RETURNING id, agent_id, COALESCE(parent_run_id, ''), COALESCE(root_run_id, ''),
+			required_capabilities, input, output, status, error, attempt, max_attempts,
 			request_id, duration_ms, created_at, started_at, completed_at`, id, at.UTC()))
 	if err == nil {
 		return run, nil
@@ -424,6 +445,30 @@ func (r *Repository) ListRuns(ctx context.Context) ([]domain.Run, error) {
 	rows, err := r.pool.Query(ctx, runSelect+" ORDER BY created_at, id")
 	if err != nil {
 		return nil, fmt.Errorf("list runs: %w", err)
+	}
+	defer rows.Close()
+	result := make([]domain.Run, 0)
+	for rows.Next() {
+		run, err := scanRun(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, run)
+	}
+	return result, rows.Err()
+}
+
+func (r *Repository) ListChildRuns(ctx context.Context, parentRunID string) ([]domain.Run, error) {
+	var exists bool
+	if err := r.pool.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM runs WHERE id = $1)", parentRunID).Scan(&exists); err != nil {
+		return nil, fmt.Errorf("check parent Run: %w", err)
+	}
+	if !exists {
+		return nil, store.ErrNotFound
+	}
+	rows, err := r.pool.Query(ctx, runSelect+" WHERE parent_run_id = $1 ORDER BY created_at, id", parentRunID)
+	if err != nil {
+		return nil, fmt.Errorf("list child Runs: %w", err)
 	}
 	defer rows.Close()
 	result := make([]domain.Run, 0)
@@ -519,10 +564,14 @@ func (r *Repository) AppendRunEvent(
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO run_events (event_id, run_id, type, message, attempt, timestamp)
-		VALUES ($1, $2, $3, $4, $5, $6)
+		INSERT INTO run_events (
+			event_id, run_id, child_run_id, parent_run_id, root_run_id,
+			type, message, attempt, timestamp
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		ON CONFLICT (event_id) DO NOTHING`,
-		event.ID, event.RunID, event.Type, event.Message, event.Attempt, event.Timestamp,
+		event.ID, event.RunID, nullableString(event.ChildRunID), nullableString(event.ParentRunID),
+		nullableString(event.RootRunID), event.Type, event.Message, event.Attempt, event.Timestamp,
 	); err != nil {
 		return fmt.Errorf("insert run event: %w", err)
 	}
@@ -554,9 +603,11 @@ func (r *Repository) ListRunEvents(ctx context.Context, runID string, limit int)
 		limit = 1000
 	}
 	rows, err := r.pool.Query(ctx, `
-		SELECT event_id, run_id, type, message, attempt, timestamp
+		SELECT event_id, run_id, COALESCE(child_run_id, ''), COALESCE(parent_run_id, ''),
+			COALESCE(root_run_id, ''), type, message, attempt, timestamp
 		FROM (
-			SELECT sequence, event_id, run_id, type, message, attempt, timestamp
+			SELECT sequence, event_id, run_id, child_run_id, parent_run_id, root_run_id,
+				type, message, attempt, timestamp
 			FROM run_events
 			WHERE run_id = $1
 			ORDER BY sequence DESC
@@ -570,7 +621,10 @@ func (r *Repository) ListRunEvents(ctx context.Context, runID string, limit int)
 	events := make([]domain.RunEvent, 0)
 	for rows.Next() {
 		var event domain.RunEvent
-		if err := rows.Scan(&event.ID, &event.RunID, &event.Type, &event.Message, &event.Attempt, &event.Timestamp); err != nil {
+		if err := rows.Scan(
+			&event.ID, &event.RunID, &event.ChildRunID, &event.ParentRunID, &event.RootRunID,
+			&event.Type, &event.Message, &event.Attempt, &event.Timestamp,
+		); err != nil {
 			return nil, fmt.Errorf("scan run event: %w", err)
 		}
 		events = append(events, event)
@@ -597,11 +651,19 @@ type rowScanner interface {
 func scanRun(row rowScanner) (domain.Run, error) {
 	var run domain.Run
 	err := row.Scan(
-		&run.ID, &run.AgentID, &run.RequiredCapabilities, &run.Input, &run.Output, &run.Status, &run.Error,
+		&run.ID, &run.AgentID, &run.ParentRunID, &run.RootRunID,
+		&run.RequiredCapabilities, &run.Input, &run.Output, &run.Status, &run.Error,
 		&run.Attempt, &run.MaxAttempts, &run.RequestID, &run.DurationMS,
 		&run.CreatedAt, &run.StartedAt, &run.CompletedAt,
 	)
 	return run, err
+}
+
+func nullableString(value string) any {
+	if value == "" {
+		return nil
+	}
+	return value
 }
 
 func scanAgent(row rowScanner) (domain.Agent, error) {
