@@ -22,11 +22,11 @@ import (
 type Server struct {
 	store  store.Repository
 	engine *engine.Engine
-	events *events.Bus
+	events events.Broker
 	mux    *http.ServeMux
 }
 
-func New(s store.Repository, e *engine.Engine, bus *events.Bus) *Server {
+func New(s store.Repository, e *engine.Engine, bus events.Broker) *Server {
 	server := &Server{store: s, engine: e, events: bus, mux: http.NewServeMux()}
 	server.routes()
 	return server

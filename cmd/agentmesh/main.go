@@ -35,6 +35,7 @@ func main() {
 	var repository store.Repository
 	var runQueue queue.Queue
 	var coordinator coordination.Coordinator
+	var eventBus events.Broker
 	if cfg.Mode == "distributed" {
 		postgresRepository, err := postgresstore.New(rootCtx, cfg.DatabaseURL)
 		if err != nil {
@@ -62,13 +63,21 @@ func main() {
 		repository = store.NewCached(postgresRepository, redisCache, cfg.CacheTTL)
 		runQueue = natsQueue
 		coordinator = redisCache
+
+		natsEvents, err := events.NewNATS(cfg.NATSURL)
+		if err != nil {
+			slog.Error("distributed event bus initialization failed", "error", err)
+			os.Exit(1)
+		}
+		defer func() { _ = natsEvents.Close() }()
+		eventBus = natsEvents
 	} else {
 		repository = store.NewMemory()
 		runQueue = queue.NewMemory(cfg.QueueSize)
 		coordinator = coordination.NewMemory()
+		eventBus = events.NewBus()
 	}
 
-	eventBus := events.NewBus()
 	executor := engine.DemoExecutor{Delay: cfg.ExecutionDelay}
 	runtimeResolver := agentruntime.NewRegistry(agentruntime.AdaptLegacy(executor))
 	if err := runtimeResolver.Register(

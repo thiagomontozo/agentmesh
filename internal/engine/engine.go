@@ -109,7 +109,7 @@ func (d DemoExecutor) Execute(ctx context.Context, agent domain.Agent, input str
 
 type Engine struct {
 	store    store.Repository
-	events   *events.Bus
+	events   events.Broker
 	resolver agentruntime.Resolver
 	queue    queue.Queue
 	coord    coordination.Coordinator
@@ -121,12 +121,12 @@ type Engine struct {
 	active   map[string]context.CancelFunc
 }
 
-func New(s store.Repository, bus *events.Bus, executor Executor, q queue.Queue, coord coordination.Coordinator, workers int, retry RetryPolicy) *Engine {
+func New(s store.Repository, bus events.Broker, executor Executor, q queue.Queue, coord coordination.Coordinator, workers int, retry RetryPolicy) *Engine {
 	resolver := agentruntime.NewRegistry(agentruntime.AdaptLegacy(executor))
 	return NewWithResolver(s, bus, resolver, q, coord, workers, retry)
 }
 
-func NewWithResolver(s store.Repository, bus *events.Bus, resolver agentruntime.Resolver, q queue.Queue, coord coordination.Coordinator, workers int, retry RetryPolicy) *Engine {
+func NewWithResolver(s store.Repository, bus events.Broker, resolver agentruntime.Resolver, q queue.Queue, coord coordination.Coordinator, workers int, retry RetryPolicy) *Engine {
 	if retry.AttemptTimeout <= 0 {
 		retry.AttemptTimeout = DefaultAttemptTimeout
 	}

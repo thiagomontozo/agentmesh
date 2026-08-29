@@ -50,7 +50,7 @@ Each runtime attempt runs synchronously under a child context bounded by `AGENTM
 
 `POST /api/v1/runs/{id}/cancel` atomically moves a queued or running Run to `canceled`. The Engine keeps cancel functions only for active executions in its own process, so local runtime contexts—including outbound HTTP requests—are interrupted immediately and retry backoff stops. Queued messages are not removed from the queue; consumers acknowledge them without execution after observing the terminal state.
 
-PostgreSQL and Memory reject stale updates to a canceled Run. This prevents a worker in another replica from overwriting cancellation with a late success or failure. There is not yet a distributed cancellation signal: a remote worker may continue its current external call until it returns or reaches the attempt timeout, but its result is discarded. The cancellation event bus is also process-local at this stage.
+PostgreSQL and Memory reject stale updates to a canceled Run. This prevents a worker in another replica from overwriting cancellation with a late success or failure. There is not yet a distributed cancellation signal: a remote worker may continue its current external call until it returns or reaches the attempt timeout, but its result is discarded. The resulting lifecycle events are distributed to all API replicas through NATS.
 
 The language boundary is covered by an integration test with two independent HTTP endpoints. Both Agents are registered through the public API and share one HTTP runtime; adding the second Agent introduces only data, not another executor implementation. See [External HTTP Agents](external-agents.md).
 
@@ -64,6 +64,7 @@ Distributed mode is enabled with `AGENTMESH_MODE=distributed`:
 
 - PostgreSQL stores agents, run state, attempt counters, timestamps, and idempotency keys. Embedded, ordered SQL migrations run at startup.
 - NATS JetStream durably stores run work. A named stream and durable pull consumer use explicit acknowledgements. Executor failures are retried by the engine; exhausted runs are published to `agentmesh.runs.dlq` before being marked failed.
+- NATS core pub/sub transports Run events between replicas on one ordered subject. Each publisher delivers locally without waiting for subscribers and uses `NoEcho` so its own NATS subscription cannot duplicate that event. Remote callbacks feed the same bounded local bus used by SSE.
 - Redis caches agent and run reads and provides token-protected execution leases. The Engine renews an active lease every third of its TTL, so a context-aware Run can safely exceed the original lease duration. Memory leases implement the same ownership and expiration contract. Cache failures fall back to PostgreSQL, while coordination failures stop delivery and make readiness fail.
 
 Lease renewal is conservative: if renewal fails or ownership is lost, the Engine cancels the runtime context, emits `run.lease_lost`, does not finalize the Run, and returns an error so the queue can redeliver it. Renewal stops before lease release on every execution exit.
@@ -73,6 +74,12 @@ Every successful lease acquisition also carries a monotonic fencing token. Redis
 Fencing protects AgentMesh Run state, not arbitrary side effects already performed by an external Agent. Agent Protocol idempotency remains required for those effects. Redis persistence is enabled in Compose, but PostgreSQL's atomic claim still advances above its stored fence if a restored Redis sequence is lower.
 
 At startup, queued Runs are republished with their Run ID as the JetStream deduplication key. A running Run is never reset globally: the recovering Engine first attempts to acquire that Run's execution lease. A healthy owner keeps renewing the lease, so another replica skips its Run. After a crashed owner's lease expires, one recovering replica acquires ownership, atomically advances the persisted execution fence, resets the Run to `queued`, releases the recovery lease, and republishes work. A stale owner can no longer finalize after recovery. The operation is idempotent; competing recovery instances either fail lease acquisition or observe that the Run is no longer `running`.
+
+## Distributed events
+
+Memory mode retains the original in-process event bus. Distributed mode implements the same `events.Broker` contract with NATS pub/sub. An SSE client connected to replica A receives lifecycle events published by a worker on replica B. NATS preserves a publisher's message order on the shared Run-events subject; the local bus preserves arrival order per Run.
+
+Subscriber channels are bounded and sends are non-blocking, so a slow SSE client cannot stall execution. Each replica retains at most 128 recent events per Run in memory. Core pub/sub intentionally adds no server-side history in this increment: events produced while a replica is disconnected are not replayed, and local history disappears on restart. Durable history, cross-restart replay, retention, and `Last-Event-ID` belong to the next event-persistence stage.
 
 ## Delivery guarantees
 

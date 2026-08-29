@@ -30,6 +30,7 @@
 - [x] Ownership-safe execution lease renewal in Memory and Redis
 - [x] Monotonic execution fencing enforced by Run persistence
 - [x] Lease-aware, fenced multi-replica Run recovery
+- [x] Cross-replica Run event bus and SSE over NATS pub/sub
 - [ ] LLM provider interface
 - [ ] OpenAI-compatible provider
 - [ ] MCP client and tool registry
