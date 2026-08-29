@@ -79,7 +79,26 @@ func (c *Cached) GetRun(ctx context.Context, id string) (domain.Run, error) {
 
 func (c *Cached) UpdateRun(ctx context.Context, run domain.Run) error {
 	if err := c.inner.UpdateRun(ctx, run); err != nil {
-		if errors.Is(err, ErrRunCanceled) {
+		if errors.Is(err, ErrRunCanceled) || errors.Is(err, ErrStaleExecution) {
+			c.delete(ctx, runKey(run.ID))
+		}
+		return err
+	}
+	c.set(ctx, runKey(run.ID), run)
+	return nil
+}
+
+func (c *Cached) ClaimRunExecution(ctx context.Context, id string, minimumFence int64) (int64, error) {
+	fence, err := c.inner.ClaimRunExecution(ctx, id, minimumFence)
+	if err != nil {
+		c.delete(ctx, runKey(id))
+	}
+	return fence, err
+}
+
+func (c *Cached) UpdateRunFenced(ctx context.Context, run domain.Run, fence int64) error {
+	if err := c.inner.UpdateRunFenced(ctx, run, fence); err != nil {
+		if errors.Is(err, ErrRunCanceled) || errors.Is(err, ErrStaleExecution) {
 			c.delete(ctx, runKey(run.ID))
 		}
 		return err

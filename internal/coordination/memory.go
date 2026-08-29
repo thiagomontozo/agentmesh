@@ -9,11 +9,11 @@ import (
 type Memory struct {
 	mu    sync.Mutex
 	locks map[string]memoryLock
-	next  uint64
+	next  int64
 }
 
 type memoryLock struct {
-	token     uint64
+	token     int64
 	expiresAt time.Time
 }
 
@@ -47,8 +47,10 @@ type memoryLease struct {
 	once        sync.Once
 	coordinator *Memory
 	key         string
-	token       uint64
+	token       int64
 }
+
+func (l *memoryLease) FencingToken() int64 { return l.token }
 
 func (l *memoryLease) Renew(ctx context.Context, ttl time.Duration) error {
 	if err := ctx.Err(); err != nil {

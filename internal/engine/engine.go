@@ -247,6 +247,13 @@ func (e *Engine) execute(ctx context.Context, runID string) error {
 			slog.Error("run lease release failed", "run_id", run.ID, "error", err)
 		}
 	}()
+	executionFence, err := e.store.ClaimRunExecution(ctx, run.ID, lease.FencingToken())
+	if errors.Is(err, store.ErrRunCanceled) || errors.Is(err, store.ErrRunNotExecutable) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("claim run %s execution: %w", run.ID, err)
+	}
 	runCtx, cancelExecution := context.WithCancel(ctx)
 	e.activeMu.Lock()
 	e.active[run.ID] = cancelExecution
@@ -270,11 +277,11 @@ func (e *Engine) execute(ctx context.Context, runID string) error {
 
 	agent, err := e.store.GetAgent(ctx, run.AgentID)
 	if err != nil {
-		return e.failRun(ctx, run, fmt.Errorf("agent not found: %w", err))
+		return e.failRun(ctx, run, executionFence, fmt.Errorf("agent not found: %w", err))
 	}
 	implementation, err := e.resolver.Resolve(agent)
 	if err != nil {
-		return e.failRun(ctx, run, fmt.Errorf("resolve runtime for agent %s: %w", agent.ID, err))
+		return e.failRun(ctx, run, executionFence, fmt.Errorf("resolve runtime for agent %s: %w", agent.ID, err))
 	}
 
 	if run.MaxAttempts < 1 {
@@ -295,7 +302,7 @@ func (e *Engine) execute(ctx context.Context, runID string) error {
 		if err != nil {
 			return err
 		}
-		if err := e.store.UpdateRun(ctx, run); err != nil {
+		if err := e.store.UpdateRunFenced(ctx, run, executionFence); err != nil {
 			if errors.Is(err, store.ErrRunCanceled) {
 				return nil
 			}
@@ -326,7 +333,7 @@ func (e *Engine) execute(ctx context.Context, runID string) error {
 			if err := run.Succeed(result.Output, time.Now()); err != nil {
 				return err
 			}
-			if err := e.store.UpdateRun(ctx, run); err != nil {
+			if err := e.store.UpdateRunFenced(ctx, run, executionFence); err != nil {
 				if errors.Is(err, store.ErrRunCanceled) {
 					return nil
 				}
@@ -336,7 +343,7 @@ func (e *Engine) execute(ctx context.Context, runID string) error {
 			return nil
 		}
 		if run.Attempt >= run.MaxAttempts {
-			return e.failRun(ctx, run, executeErr)
+			return e.failRun(ctx, run, executionFence, executeErr)
 		}
 
 		backoff := e.backoff(run.Attempt)
@@ -383,11 +390,11 @@ func executeRuntimeSafely(ctx context.Context, implementation agentruntime.Runti
 	return implementation.Execute(ctx, request)
 }
 
-func (e *Engine) failRun(ctx context.Context, run domain.Run, err error) error {
+func (e *Engine) failRun(ctx context.Context, run domain.Run, executionFence int64, err error) error {
 	if transitionErr := run.Fail(err, time.Now()); transitionErr != nil {
 		return transitionErr
 	}
-	if updateErr := e.store.UpdateRun(ctx, run); updateErr != nil {
+	if updateErr := e.store.UpdateRunFenced(ctx, run, executionFence); updateErr != nil {
 		if errors.Is(updateErr, store.ErrRunCanceled) {
 			return nil
 		}

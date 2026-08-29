@@ -140,6 +140,50 @@ func TestMemoryCancelMissingRun(t *testing.T) {
 	}
 }
 
+func TestMemoryExecutionFenceRejectsStaleWriter(t *testing.T) {
+	ctx := context.Background()
+	memory := NewMemory()
+	run := domain.Run{ID: "run_1", Status: domain.RunQueued, MaxAttempts: 3}
+	if _, _, err := memory.CreateRun(ctx, run, ""); err != nil {
+		t.Fatal(err)
+	}
+	firstFence, err := memory.ClaimRunExecution(ctx, run.ID, 10)
+	if err != nil || firstFence != 10 {
+		t.Fatalf("first execution claim: fence=%d err=%v", firstFence, err)
+	}
+	if err := run.Start(time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := memory.UpdateRunFenced(ctx, run, firstFence); err != nil {
+		t.Fatal(err)
+	}
+	secondFence, err := memory.ClaimRunExecution(ctx, run.ID, 2)
+	if err != nil || secondFence <= firstFence {
+		t.Fatalf("second execution claim: first=%d second=%d err=%v", firstFence, secondFence, err)
+	}
+	stale := run
+	if err := stale.Succeed("stale", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := memory.UpdateRunFenced(ctx, stale, firstFence); !errors.Is(err, ErrStaleExecution) {
+		t.Fatalf("expected stale writer rejection, got %v", err)
+	}
+	current := run
+	if err := current.Succeed("current", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := memory.UpdateRunFenced(ctx, current, secondFence); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := memory.GetRun(ctx, run.ID)
+	if err != nil || loaded.Output != "current" || loaded.Status != domain.RunSucceeded {
+		t.Fatalf("new owner did not win: run=%+v err=%v", loaded, err)
+	}
+	if err := memory.UpdateRun(ctx, stale); !errors.Is(err, ErrStaleExecution) {
+		t.Fatalf("expected unfenced writer rejection, got %v", err)
+	}
+}
+
 func TestMemoryCreateRunIsIdempotent(t *testing.T) {
 	ctx := context.Background()
 	memory := NewMemory()

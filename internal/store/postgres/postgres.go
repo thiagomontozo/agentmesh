@@ -193,7 +193,7 @@ func (r *Repository) UpdateRun(ctx context.Context, run domain.Run) error {
 	command, err := r.pool.Exec(ctx, `
 		UPDATE runs SET output = $2, status = $3, error = $4, attempt = $5,
 			max_attempts = $6, started_at = $7, completed_at = $8
-		WHERE id = $1 AND status <> 'canceled'`,
+		WHERE id = $1 AND status <> 'canceled' AND execution_fence = 0`,
 		run.ID, run.Output, run.Status, run.Error, run.Attempt, run.MaxAttempts,
 		run.StartedAt, run.CompletedAt,
 	)
@@ -201,16 +201,76 @@ func (r *Repository) UpdateRun(ctx context.Context, run domain.Run) error {
 		return fmt.Errorf("update run: %w", err)
 	}
 	if command.RowsAffected() == 0 {
-		existing, getErr := r.GetRun(ctx, run.ID)
-		if getErr != nil {
-			return getErr
-		}
-		if existing.Status == domain.RunCanceled {
-			return store.ErrRunCanceled
-		}
-		return fmt.Errorf("update run affected no rows")
+		return r.classifyRunWriteFailure(ctx, run.ID, 0)
 	}
 	return nil
+}
+
+func (r *Repository) ClaimRunExecution(ctx context.Context, id string, minimumFence int64) (int64, error) {
+	var fence int64
+	err := r.pool.QueryRow(ctx, `
+		UPDATE runs
+		SET execution_fence = GREATEST(execution_fence + 1, $2)
+		WHERE id = $1 AND status IN ('queued', 'running')
+		RETURNING execution_fence`, id, minimumFence).Scan(&fence)
+	if err == nil {
+		return fence, nil
+	}
+	if err != pgx.ErrNoRows {
+		return 0, fmt.Errorf("claim run execution: %w", err)
+	}
+	status, _, stateErr := r.runStateAndFence(ctx, id)
+	if stateErr != nil {
+		return 0, stateErr
+	}
+	if status == domain.RunCanceled {
+		return 0, store.ErrRunCanceled
+	}
+	return 0, fmt.Errorf("%w from status %s", store.ErrRunNotExecutable, status)
+}
+
+func (r *Repository) UpdateRunFenced(ctx context.Context, run domain.Run, fence int64) error {
+	command, err := r.pool.Exec(ctx, `
+		UPDATE runs SET output = $2, status = $3, error = $4, attempt = $5,
+			max_attempts = $6, started_at = $7, completed_at = $8
+		WHERE id = $1 AND status <> 'canceled' AND execution_fence = $9`,
+		run.ID, run.Output, run.Status, run.Error, run.Attempt, run.MaxAttempts,
+		run.StartedAt, run.CompletedAt, fence,
+	)
+	if err != nil {
+		return fmt.Errorf("update fenced run: %w", err)
+	}
+	if command.RowsAffected() == 0 {
+		return r.classifyRunWriteFailure(ctx, run.ID, fence)
+	}
+	return nil
+}
+
+func (r *Repository) classifyRunWriteFailure(ctx context.Context, id string, expectedFence int64) error {
+	status, currentFence, err := r.runStateAndFence(ctx, id)
+	if err != nil {
+		return err
+	}
+	if status == domain.RunCanceled {
+		return store.ErrRunCanceled
+	}
+	if currentFence != expectedFence || expectedFence <= 0 {
+		return fmt.Errorf("%w: current=%d provided=%d", store.ErrStaleExecution, currentFence, expectedFence)
+	}
+	return fmt.Errorf("update run affected no rows")
+}
+
+func (r *Repository) runStateAndFence(ctx context.Context, id string) (domain.RunStatus, int64, error) {
+	var status domain.RunStatus
+	var fence int64
+	err := r.pool.QueryRow(ctx, "SELECT status, execution_fence FROM runs WHERE id = $1", id).Scan(&status, &fence)
+	if err == pgx.ErrNoRows {
+		return "", 0, store.ErrNotFound
+	}
+	if err != nil {
+		return "", 0, fmt.Errorf("select run execution fence: %w", err)
+	}
+	return status, fence, nil
 }
 
 func (r *Repository) CancelRun(ctx context.Context, id string, at time.Time) (domain.Run, error) {

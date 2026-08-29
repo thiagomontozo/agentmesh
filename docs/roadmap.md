@@ -28,6 +28,7 @@
 - [x] Runtime panic isolation
 - [x] Persisted Run cancellation with stale-writer protection
 - [x] Ownership-safe execution lease renewal in Memory and Redis
+- [x] Monotonic execution fencing enforced by Run persistence
 - [ ] LLM provider interface
 - [ ] OpenAI-compatible provider
 - [ ] MCP client and tool registry

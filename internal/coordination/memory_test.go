@@ -39,10 +39,14 @@ func TestMemoryLeaseRejectsRenewalAfterOwnershipChanges(t *testing.T) {
 	if err != nil || !acquired {
 		t.Fatalf("acquire stale lease: acquired=%v err=%v", acquired, err)
 	}
+	staleToken := stale.FencingToken()
 	time.Sleep(40 * time.Millisecond)
 	owner, acquired, err := coordinator.Acquire(context.Background(), "run:1", time.Second)
 	if err != nil || !acquired {
 		t.Fatalf("acquire replacement lease: acquired=%v err=%v", acquired, err)
+	}
+	if owner.FencingToken() <= staleToken {
+		t.Fatalf("fencing token did not increase: stale=%d owner=%d", staleToken, owner.FencingToken())
 	}
 	if err := stale.Renew(context.Background(), time.Second); !errors.Is(err, ErrLeaseLost) {
 		t.Fatalf("expected ErrLeaseLost, got %v", err)

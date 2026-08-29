@@ -46,4 +46,8 @@ The `canceled` state is durable and stale workers cannot replace it, but active 
 
 ## A Run reports `run.lease_lost`
 
-The worker could not renew the execution lease or Redis reported that another token owns it. AgentMesh cancels the runtime context and deliberately leaves the Run non-terminal so the queue can redeliver it. Check Redis connectivity and latency, then confirm `AGENTMESH_LEASE_TTL` is comfortably above transient network delays. A runtime that ignores context can continue side effects after ownership is lost; fencing protection is tracked separately.
+The worker could not renew the execution lease or Redis reported that another token owns it. AgentMesh cancels the runtime context and deliberately leaves the Run non-terminal so the queue can redeliver it. Check Redis connectivity and latency, then confirm `AGENTMESH_LEASE_TTL` is comfortably above transient network delays. A runtime that ignores context can continue external side effects after ownership is lost, but its fencing token prevents it from overwriting Run state after a newer owner claims execution.
+
+## A worker reports `stale run execution fence`
+
+A newer lease owner claimed the Run before this worker attempted to persist state. The write was deliberately rejected; do not retry it with an unfenced repository update. Confirm whether a lease expired, Redis was unavailable, or duplicate workers used inconsistent coordination infrastructure. The current Run state belongs to the highest repository-issued fence.
