@@ -97,7 +97,7 @@ func TestDistributedRunLifecycleAndIdempotency(t *testing.T) {
 	}
 	run := domain.Run{
 		ID: "run_" + suffix, AgentID: agent.ID, Input: "hello", Status: domain.RunQueued,
-		MaxAttempts: 3, CreatedAt: time.Now().UTC(),
+		MaxAttempts: 3, RequestID: "req_" + suffix, CreatedAt: time.Now().UTC(),
 	}
 	created, isNew, err := repository.CreateRun(ctx, run, "integration-"+suffix)
 	if err != nil || !isNew {
@@ -107,6 +107,10 @@ func TestDistributedRunLifecycleAndIdempotency(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitForStatus(t, ctx, repository, created.ID, domain.RunSucceeded)
+	completedRun, err := repository.GetRun(ctx, created.ID)
+	if err != nil || completedRun.RequestID != run.RequestID || completedRun.CompletedAt == nil || completedRun.DurationMS < 0 {
+		t.Fatalf("PostgreSQL Run observability fields were not persisted: run=%+v err=%v", completedRun, err)
+	}
 
 	replayed, isNew, err := repository.CreateRun(ctx, domain.Run{
 		ID: "different_" + suffix, AgentID: agent.ID, Input: run.Input, Status: domain.RunQueued,

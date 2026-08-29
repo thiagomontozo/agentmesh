@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"sync"
 	"time"
+
+	"github.com/thiagomontozo/agentmesh/internal/observability"
 )
 
 var ErrFull = errors.New("run queue is full")
@@ -45,20 +47,23 @@ func (m *Memory) Consume(ctx context.Context, workers int, handler Handler) erro
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
+			workerCtx := observability.WithWorkerID(ctx, fmt.Sprintf("memory-%d", id))
 			for {
 				select {
-				case <-ctx.Done():
+				case <-workerCtx.Done():
 					return
 				case runID := <-m.jobs:
-					if err := handler(ctx, runID); err != nil && ctx.Err() == nil {
-						slog.Error("memory queue handler failed", "worker", id, "run_id", runID, "error", err)
+					if err := handler(workerCtx, runID); err != nil && workerCtx.Err() == nil {
+						attributes := append(observability.ContextAttrs(workerCtx), "run_id", runID, "error", err)
+						slog.ErrorContext(workerCtx, "memory queue handler failed", attributes...)
 						select {
-						case <-ctx.Done():
+						case <-workerCtx.Done():
 							return
 						case <-time.After(100 * time.Millisecond):
 						}
-						if err := m.Enqueue(ctx, runID); err != nil {
-							slog.Error("memory queue could not requeue run", "run_id", runID, "error", err)
+						if err := m.Enqueue(workerCtx, runID); err != nil {
+							attributes := append(observability.ContextAttrs(workerCtx), "run_id", runID, "error", err)
+							slog.ErrorContext(workerCtx, "memory queue could not requeue run", attributes...)
 						}
 					}
 				}

@@ -88,3 +88,11 @@ SSE frames expose the stable event identity through the standard `id:` field and
 Run submission is idempotent when clients send `Idempotency-Key`. PostgreSQL enforces uniqueness, so concurrent duplicate requests return the same run. JetStream delivery is at least once; state-transition validation and run IDs make duplicate delivery safe at the control-plane boundary.
 
 The current demo executor is deterministic. Side-effecting future executors must independently make their external actions idempotent because no queue can make an arbitrary external side effect exactly once.
+
+## Basic observability
+
+The application emits JSON through `log/slog`. HTTP middleware accepts a safe `X-Request-ID` or generates one, returns it in the response, and records method, path, status, response size, and duration. Run creation persists that correlation ID so asynchronous execution logs can retain the originating request context after queue delivery.
+
+Every process has an `instance_id`: `AGENTMESH_INSTANCE_ID` when configured, otherwise hostname plus a random suffix. Memory workers use stable IDs such as `memory-1`; JetStream deliveries acquire bounded worker slots such as `nats-1`. Engine lifecycle, retry, timeout, panic, lease, success, and failure logs add the identifiers available at their boundary: `request_id`, `instance_id`, `worker_id`, `run_id`, `agent_id`, and `attempt`.
+
+Terminal Runs expose persisted `duration_ms`, measured from execution start or, when execution never started, creation time. Recovery clears the partial duration before requeue. This increment intentionally does not add metrics, tracing, or OpenTelemetry; logs and persisted lifecycle fields are the operational baseline for evaluating those later.

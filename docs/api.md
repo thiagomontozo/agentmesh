@@ -6,6 +6,8 @@ The API uses JSON under `/api/v1`. Errors have the form:
 {"error":{"message":"description"}}
 ```
 
+Every response includes `X-Request-ID`. A client-provided value is preserved when it is at most 128 characters and contains only letters, digits, `-`, `_`, `.`, or `:`; otherwise AgentMesh generates a safe ID. A newly created Run persists this value as `request_id` for asynchronous correlation.
+
 ## Health
 
 ```bash
@@ -61,7 +63,7 @@ curl -i -X POST http://localhost:8080/api/v1/runs \
 
 A new run returns `202 Accepted`. Repeating the same key and payload returns `200 OK`, the original run, and `Idempotency-Replayed: true`. Reusing a key with a different payload returns `409 Conflict`.
 
-Run status progresses through `queued`, `running`, and a terminal state: `succeeded`, `failed`, or `canceled`. The response includes `attempt`, `max_attempts`, and lifecycle timestamps.
+Run status progresses through `queued`, `running`, and a terminal state: `succeeded`, `failed`, or `canceled`. The response includes `request_id`, `attempt`, `max_attempts`, lifecycle timestamps, and `duration_ms`. Duration is explicit after a terminal transition and measures execution time from `started_at`, or total queued lifetime if execution never started.
 
 ```bash
 curl http://localhost:8080/api/v1/runs

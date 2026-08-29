@@ -153,11 +153,11 @@ func (r *Repository) CreateRun(ctx context.Context, run domain.Run, idempotencyK
 	command, err := r.pool.Exec(ctx, `
 		INSERT INTO runs (
 			id, agent_id, input, output, status, error, attempt, max_attempts,
-			idempotency_key, created_at, started_at, completed_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+			request_id, duration_ms, idempotency_key, created_at, started_at, completed_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 		ON CONFLICT DO NOTHING`,
 		run.ID, run.AgentID, run.Input, run.Output, run.Status, run.Error, run.Attempt,
-		run.MaxAttempts, key, run.CreatedAt, run.StartedAt, run.CompletedAt,
+		run.MaxAttempts, run.RequestID, run.DurationMS, key, run.CreatedAt, run.StartedAt, run.CompletedAt,
 	)
 	if err != nil {
 		return domain.Run{}, false, fmt.Errorf("insert run: %w", err)
@@ -176,7 +176,7 @@ func (r *Repository) CreateRun(ctx context.Context, run domain.Run, idempotencyK
 }
 
 const runSelect = `SELECT id, agent_id, input, output, status, error, attempt, max_attempts,
-	created_at, started_at, completed_at FROM runs`
+	request_id, duration_ms, created_at, started_at, completed_at FROM runs`
 
 func (r *Repository) GetRun(ctx context.Context, id string) (domain.Run, error) {
 	run, err := scanRun(r.pool.QueryRow(ctx, runSelect+" WHERE id = $1", id))
@@ -192,10 +192,10 @@ func (r *Repository) GetRun(ctx context.Context, id string) (domain.Run, error) 
 func (r *Repository) UpdateRun(ctx context.Context, run domain.Run) error {
 	command, err := r.pool.Exec(ctx, `
 		UPDATE runs SET output = $2, status = $3, error = $4, attempt = $5,
-			max_attempts = $6, started_at = $7, completed_at = $8
+			max_attempts = $6, request_id = $7, duration_ms = $8, started_at = $9, completed_at = $10
 		WHERE id = $1 AND status <> 'canceled' AND execution_fence = 0`,
 		run.ID, run.Output, run.Status, run.Error, run.Attempt, run.MaxAttempts,
-		run.StartedAt, run.CompletedAt,
+		run.RequestID, run.DurationMS, run.StartedAt, run.CompletedAt,
 	)
 	if err != nil {
 		return fmt.Errorf("update run: %w", err)
@@ -232,10 +232,10 @@ func (r *Repository) ClaimRunExecution(ctx context.Context, id string, minimumFe
 func (r *Repository) UpdateRunFenced(ctx context.Context, run domain.Run, fence int64) error {
 	command, err := r.pool.Exec(ctx, `
 		UPDATE runs SET output = $2, status = $3, error = $4, attempt = $5,
-			max_attempts = $6, started_at = $7, completed_at = $8
-		WHERE id = $1 AND status <> 'canceled' AND execution_fence = $9`,
+			max_attempts = $6, request_id = $7, duration_ms = $8, started_at = $9, completed_at = $10
+		WHERE id = $1 AND status <> 'canceled' AND execution_fence = $11`,
 		run.ID, run.Output, run.Status, run.Error, run.Attempt, run.MaxAttempts,
-		run.StartedAt, run.CompletedAt, fence,
+		run.RequestID, run.DurationMS, run.StartedAt, run.CompletedAt, fence,
 	)
 	if err != nil {
 		return fmt.Errorf("update fenced run: %w", err)
@@ -275,10 +275,11 @@ func (r *Repository) runStateAndFence(ctx context.Context, id string) (domain.Ru
 
 func (r *Repository) CancelRun(ctx context.Context, id string, at time.Time) (domain.Run, error) {
 	run, err := scanRun(r.pool.QueryRow(ctx, `
-		UPDATE runs SET status = 'canceled', output = '', error = '', completed_at = $2
+		UPDATE runs SET status = 'canceled', output = '', error = '', completed_at = $2,
+			duration_ms = GREATEST(0, FLOOR(EXTRACT(EPOCH FROM ($2 - COALESCE(started_at, created_at))) * 1000)::BIGINT)
 		WHERE id = $1 AND status IN ('queued', 'running')
 		RETURNING id, agent_id, input, output, status, error, attempt, max_attempts,
-			created_at, started_at, completed_at`, id, at.UTC()))
+			request_id, duration_ms, created_at, started_at, completed_at`, id, at.UTC()))
 	if err == nil {
 		return run, nil
 	}
@@ -333,7 +334,7 @@ func (r *Repository) RecoverRun(ctx context.Context, id string, minimumFence int
 	command, err := r.pool.Exec(ctx, `
 		UPDATE runs
 		SET status = 'queued', started_at = NULL, attempt = GREATEST(attempt - 1, 0),
-			execution_fence = GREATEST(execution_fence + 1, $2)
+			duration_ms = 0, execution_fence = GREATEST(execution_fence + 1, $2)
 		WHERE id = $1 AND status = 'running'`, id, minimumFence)
 	if err != nil {
 		return false, fmt.Errorf("recover run: %w", err)
@@ -442,7 +443,8 @@ func scanRun(row rowScanner) (domain.Run, error) {
 	var run domain.Run
 	err := row.Scan(
 		&run.ID, &run.AgentID, &run.Input, &run.Output, &run.Status, &run.Error,
-		&run.Attempt, &run.MaxAttempts, &run.CreatedAt, &run.StartedAt, &run.CompletedAt,
+		&run.Attempt, &run.MaxAttempts, &run.RequestID, &run.DurationMS,
+		&run.CreatedAt, &run.StartedAt, &run.CompletedAt,
 	)
 	return run, err
 }

@@ -16,24 +16,30 @@ import (
 	"github.com/thiagomontozo/agentmesh/internal/domain"
 	"github.com/thiagomontozo/agentmesh/internal/engine"
 	"github.com/thiagomontozo/agentmesh/internal/events"
+	"github.com/thiagomontozo/agentmesh/internal/observability"
 	"github.com/thiagomontozo/agentmesh/internal/store"
 )
 
 type Server struct {
-	store  store.Repository
-	engine *engine.Engine
-	events events.Broker
-	mux    *http.ServeMux
+	store      store.Repository
+	engine     *engine.Engine
+	events     events.Broker
+	mux        *http.ServeMux
+	instanceID string
 }
 
 func New(s store.Repository, e *engine.Engine, bus events.Broker) *Server {
-	server := &Server{store: s, engine: e, events: bus, mux: http.NewServeMux()}
+	return NewWithInstanceID(s, e, bus, "local")
+}
+
+func NewWithInstanceID(s store.Repository, e *engine.Engine, bus events.Broker, instanceID string) *Server {
+	server := &Server{store: s, engine: e, events: bus, mux: http.NewServeMux(), instanceID: instanceID}
 	server.routes()
 	return server
 }
 
 func (s *Server) Handler() http.Handler {
-	return loggingMiddleware(recoverMiddleware(s.mux))
+	return requestContextMiddleware(s.instanceID, loggingMiddleware(recoverMiddleware(s.mux)))
 }
 
 func (s *Server) routes() {
@@ -101,6 +107,8 @@ func (s *Server) createAgent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not create agent")
 		return
 	}
+	attributes := append(observability.ContextAttrs(r.Context()), "agent_id", agent.ID, "runtime", agent.Runtime)
+	slog.InfoContext(r.Context(), "agent created", attributes...)
 	writeJSON(w, http.StatusCreated, agent)
 }
 
@@ -163,6 +171,7 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 		Input:       request.Input,
 		Status:      domain.RunQueued,
 		MaxAttempts: s.engine.MaxAttempts(),
+		RequestID:   observability.RequestID(r.Context()),
 		CreatedAt:   time.Now().UTC(),
 	}
 	createdRun, isNew, err := s.store.CreateRun(r.Context(), run, idempotencyKey)
@@ -176,6 +185,8 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.Header().Set("Idempotency-Replayed", "true")
+		attributes := append(observability.ContextAttrs(r.Context()), "run_id", createdRun.ID, "agent_id", createdRun.AgentID)
+		slog.InfoContext(r.Context(), "run submission replayed", attributes...)
 		writeJSON(w, http.StatusOK, createdRun)
 		return
 	}
@@ -183,6 +194,8 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 	s.events.Publish(domain.RunEvent{
 		RunID: run.ID, Type: "run.queued", Message: "run queued", Attempt: run.Attempt, Timestamp: time.Now().UTC(),
 	})
+	attributes := append(observability.ContextAttrs(r.Context()), "run_id", run.ID, "agent_id", run.AgentID, "attempt", run.Attempt)
+	slog.InfoContext(r.Context(), "run queued", attributes...)
 
 	if err := s.engine.Enqueue(r.Context(), run.ID); err != nil {
 		if transitionErr := run.Fail(err, time.Now()); transitionErr != nil {
@@ -320,8 +333,20 @@ func newID(prefix string) string {
 func loggingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		started := time.Now()
-		next.ServeHTTP(w, r)
-		slog.Info("http request", "method", r.Method, "path", r.URL.Path, "duration", time.Since(started))
+		recorder := &responseRecorder{ResponseWriter: w}
+		next.ServeHTTP(recorder, r)
+		status := recorder.status
+		if status == 0 {
+			status = http.StatusOK
+		}
+		attributes := append(observability.ContextAttrs(r.Context()),
+			"method", r.Method,
+			"path", r.URL.Path,
+			"status", status,
+			"response_bytes", recorder.bytes,
+			"duration_ms", time.Since(started).Milliseconds(),
+		)
+		slog.InfoContext(r.Context(), "http request", attributes...)
 	})
 }
 
@@ -329,10 +354,74 @@ func recoverMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if recovered := recover(); recovered != nil {
-				slog.Error("panic recovered", "error", recovered)
+				attributes := append(observability.ContextAttrs(r.Context()), "panic", recovered)
+				slog.ErrorContext(r.Context(), "http panic recovered", attributes...)
 				writeError(w, http.StatusInternalServerError, "internal server error")
 			}
 		}()
 		next.ServeHTTP(w, r)
 	})
+}
+
+type responseRecorder struct {
+	http.ResponseWriter
+	status int
+	bytes  int
+}
+
+func (r *responseRecorder) WriteHeader(status int) {
+	if r.status != 0 {
+		return
+	}
+	r.status = status
+	r.ResponseWriter.WriteHeader(status)
+}
+
+func (r *responseRecorder) Write(payload []byte) (int, error) {
+	if r.status == 0 {
+		r.WriteHeader(http.StatusOK)
+	}
+	written, err := r.ResponseWriter.Write(payload)
+	r.bytes += written
+	return written, err
+}
+
+func (r *responseRecorder) Flush() {
+	if r.status == 0 {
+		r.WriteHeader(http.StatusOK)
+	}
+	if flusher, ok := r.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
+func (r *responseRecorder) Unwrap() http.ResponseWriter {
+	return r.ResponseWriter
+}
+
+func requestContextMiddleware(instanceID string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestID := normalizedRequestID(r.Header.Get("X-Request-ID"))
+		w.Header().Set("X-Request-ID", requestID)
+		ctx := observability.WithRequestID(r.Context(), requestID)
+		ctx = observability.WithInstanceID(ctx, instanceID)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+func normalizedRequestID(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" || len(value) > 128 {
+		return newID("req")
+	}
+	for _, character := range value {
+		if (character >= 'a' && character <= 'z') ||
+			(character >= 'A' && character <= 'Z') ||
+			(character >= '0' && character <= '9') ||
+			strings.ContainsRune("-_.:", character) {
+			continue
+		}
+		return newID("req")
+	}
+	return value
 }

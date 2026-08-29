@@ -26,6 +26,7 @@ type Config struct {
 	LeaseTTL          time.Duration
 	EventRetention    time.Duration
 	EventHistoryLimit int
+	InstanceID        string
 }
 
 func Load() (Config, error) {
@@ -118,6 +119,10 @@ func Load() (Config, error) {
 	if eventHistoryLimit < 1 {
 		return Config{}, fmt.Errorf("AGENTMESH_EVENT_HISTORY_LIMIT must be >= 1")
 	}
+	instanceID := stringEnv("AGENTMESH_INSTANCE_ID", "")
+	if len(instanceID) > 128 {
+		return Config{}, fmt.Errorf("AGENTMESH_INSTANCE_ID must be at most 128 characters")
+	}
 
 	databaseURL := stringEnv("AGENTMESH_DATABASE_URL", "")
 	natsURL := stringEnv("AGENTMESH_NATS_URL", "")
@@ -145,6 +150,7 @@ func Load() (Config, error) {
 		LeaseTTL:          leaseTTL,
 		EventRetention:    eventRetention,
 		EventHistoryLimit: eventHistoryLimit,
+		InstanceID:        instanceID,
 	}, nil
 }
 

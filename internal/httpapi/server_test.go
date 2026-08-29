@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -48,6 +50,33 @@ func TestHealth(t *testing.T) {
 	}
 }
 
+func TestRequestIDIsPreservedOrGenerated(t *testing.T) {
+	server, _ := newTestServer(t)
+	for _, test := range []struct {
+		name     string
+		provided string
+		want     string
+	}{
+		{name: "preserved", provided: "request-client_1", want: "request-client_1"},
+		{name: "generated when absent", want: "req_"},
+		{name: "generated when unsafe", provided: "unsafe request", want: "req_"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+			request.Header.Set("X-Request-ID", test.provided)
+			response := httptest.NewRecorder()
+			server.Handler().ServeHTTP(response, request)
+			got := response.Header().Get("X-Request-ID")
+			if test.want == "req_" && !strings.HasPrefix(got, test.want) {
+				t.Fatalf("expected generated request ID, got %q", got)
+			}
+			if test.want != "req_" && got != test.want {
+				t.Fatalf("expected %q, got %q", test.want, got)
+			}
+		})
+	}
+}
+
 func TestCreateAgentAndRun(t *testing.T) {
 	server, _ := newTestServer(t)
 
@@ -73,12 +102,67 @@ func TestCreateAgentAndRun(t *testing.T) {
 	runPayload, _ := json.Marshal(map[string]string{"agent_id": agentID, "input": "hello"})
 	runRequest := httptest.NewRequest(http.MethodPost, "/api/v1/runs", bytes.NewReader(runPayload))
 	runRequest.Header.Set("Content-Type", "application/json")
+	runRequest.Header.Set("X-Request-ID", "request-create-run")
 	runResponse := httptest.NewRecorder()
 	server.Handler().ServeHTTP(runResponse, runRequest)
 
 	if runResponse.Code != http.StatusAccepted {
 		t.Fatalf("expected run status 202, got %d: %s", runResponse.Code, runResponse.Body.String())
 	}
+	var run domain.Run
+	if err := json.Unmarshal(runResponse.Body.Bytes(), &run); err != nil {
+		t.Fatal(err)
+	}
+	if run.RequestID != "request-create-run" || runResponse.Header().Get("X-Request-ID") != run.RequestID {
+		t.Fatalf("request correlation was not persisted: run=%+v header=%q", run, runResponse.Header().Get("X-Request-ID"))
+	}
+	waitForRunStatus(t, server.store, run.ID, domain.RunSucceeded)
+	completed, err := server.store.GetRun(context.Background(), run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if completed.RequestID != run.RequestID || completed.CompletedAt == nil || completed.DurationMS < 0 {
+		t.Fatalf("run observability fields were not retained: %+v", completed)
+	}
+}
+
+func TestRunLogsContainCorrelationFields(t *testing.T) {
+	var logs synchronizedBuffer
+	originalLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
+	defer slog.SetDefault(originalLogger)
+
+	server, _ := newTestServer(t)
+	if _, err := server.store.CreateAgent(context.Background(), domain.Agent{ID: "agt_logs", Name: "logs"}); err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/runs", strings.NewReader(`{"agent_id":"agt_logs","input":"hello"}`))
+	request.Header.Set("X-Request-ID", "request-logs")
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	var run domain.Run
+	if err := json.Unmarshal(response.Body.Bytes(), &run); err != nil {
+		t.Fatal(err)
+	}
+	waitForRunStatus(t, server.store, run.ID, domain.RunSucceeded)
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		output := logs.String()
+		if strings.Contains(output, `"msg":"run succeeded"`) {
+			for _, field := range []string{
+				`"request_id":"request-logs"`, `"instance_id":"local"`, `"worker_id":"memory-1"`,
+				`"run_id":"` + run.ID + `"`, `"agent_id":"agt_logs"`, `"attempt":1`, `"duration_ms":`,
+			} {
+				if !strings.Contains(output, field) {
+					t.Fatalf("structured logs do not contain %s: %s", field, output)
+				}
+			}
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for correlated success log: %s", logs.String())
 }
 
 func TestCreateAgentWithExecutionMetadataAndList(t *testing.T) {
@@ -377,4 +461,21 @@ func waitForRunStatus(t *testing.T, repository store.Repository, runID string, w
 		time.Sleep(time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for run status %s", want)
+}
+
+type synchronizedBuffer struct {
+	mu     sync.Mutex
+	buffer bytes.Buffer
+}
+
+func (b *synchronizedBuffer) Write(payload []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buffer.Write(payload)
+}
+
+func (b *synchronizedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buffer.String()
 }

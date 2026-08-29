@@ -12,6 +12,7 @@ import (
 	"github.com/thiagomontozo/agentmesh/internal/coordination"
 	"github.com/thiagomontozo/agentmesh/internal/domain"
 	"github.com/thiagomontozo/agentmesh/internal/events"
+	"github.com/thiagomontozo/agentmesh/internal/observability"
 	"github.com/thiagomontozo/agentmesh/internal/queue"
 	agentruntime "github.com/thiagomontozo/agentmesh/internal/runtime"
 	"github.com/thiagomontozo/agentmesh/internal/store"
@@ -108,17 +109,18 @@ func (d DemoExecutor) Execute(ctx context.Context, agent domain.Agent, input str
 }
 
 type Engine struct {
-	store    store.Repository
-	events   events.Broker
-	resolver agentruntime.Resolver
-	queue    queue.Queue
-	coord    coordination.Coordinator
-	workers  int
-	retry    RetryPolicy
-	wg       sync.WaitGroup
-	errors   chan error
-	activeMu sync.Mutex
-	active   map[string]context.CancelFunc
+	store      store.Repository
+	events     events.Broker
+	resolver   agentruntime.Resolver
+	queue      queue.Queue
+	coord      coordination.Coordinator
+	workers    int
+	retry      RetryPolicy
+	wg         sync.WaitGroup
+	errors     chan error
+	activeMu   sync.Mutex
+	active     map[string]context.CancelFunc
+	instanceID string
 }
 
 func New(s store.Repository, bus events.Broker, executor Executor, q queue.Queue, coord coordination.Coordinator, workers int, retry RetryPolicy) *Engine {
@@ -134,19 +136,27 @@ func NewWithResolver(s store.Repository, bus events.Broker, resolver agentruntim
 		retry.LeaseTTL = DefaultLeaseTTL
 	}
 	return &Engine{
-		store:    s,
-		events:   bus,
-		resolver: resolver,
-		queue:    q,
-		coord:    coord,
-		workers:  workers,
-		retry:    retry,
-		errors:   make(chan error, 1),
-		active:   make(map[string]context.CancelFunc),
+		store:      s,
+		events:     bus,
+		resolver:   resolver,
+		queue:      q,
+		coord:      coord,
+		workers:    workers,
+		retry:      retry,
+		errors:     make(chan error, 1),
+		active:     make(map[string]context.CancelFunc),
+		instanceID: "local",
+	}
+}
+
+func (e *Engine) SetInstanceID(instanceID string) {
+	if instanceID != "" {
+		e.instanceID = instanceID
 	}
 }
 
 func (e *Engine) Start(ctx context.Context) {
+	ctx = observability.WithInstanceID(ctx, e.instanceID)
 	e.wg.Add(1)
 	go func() {
 		defer e.wg.Done()
@@ -162,7 +172,7 @@ func (e *Engine) Start(ctx context.Context) {
 func (e *Engine) Stop() {
 	e.wg.Wait()
 	if err := e.queue.Close(); err != nil {
-		slog.Error("run queue close failed", "error", err)
+		slog.Error("run queue close failed", "instance_id", e.instanceID, "error", err)
 	}
 }
 
@@ -190,6 +200,8 @@ func (e *Engine) Cancel(ctx context.Context, runID string) (domain.Run, error) {
 		cancelExecution()
 	}
 	e.publish(run.ID, "run.canceled", "run canceled", run.Attempt)
+	attributes := runLogAttrs(ctx, run)
+	slog.InfoContext(ctx, "run canceled", attributes...)
 	return run, nil
 }
 
@@ -250,6 +262,7 @@ func (e *Engine) execute(ctx context.Context, runID string) error {
 	if err != nil {
 		return fmt.Errorf("load run %s: %w", runID, err)
 	}
+	ctx = observability.WithRequestID(ctx, run.RequestID)
 	if run.Status == domain.RunSucceeded {
 		return nil
 	}
@@ -268,7 +281,8 @@ func (e *Engine) execute(ctx context.Context, runID string) error {
 	}
 	defer func() {
 		if err := releaseLease(lease); err != nil {
-			slog.Error("run lease release failed", "run_id", run.ID, "error", err)
+			attributes := append(runLogAttrs(ctx, run), "error", err)
+			slog.ErrorContext(ctx, "run lease release failed", attributes...)
 		}
 	}()
 	executionFence, err := e.store.ClaimRunExecution(ctx, run.ID, lease.FencingToken())
@@ -307,12 +321,13 @@ func (e *Engine) execute(ctx context.Context, runID string) error {
 	if err != nil {
 		return e.failRun(ctx, run, executionFence, fmt.Errorf("resolve runtime for agent %s: %w", agent.ID, err))
 	}
+	slog.InfoContext(ctx, "run execution claimed", runLogAttrs(ctx, run)...)
 
 	if run.MaxAttempts < 1 {
 		run.MaxAttempts = e.retry.MaxAttempts
 	}
 	for {
-		if renewalErr := e.leaseRenewalError(run.ID, run.Attempt, keeper); renewalErr != nil {
+		if renewalErr := e.leaseRenewalError(ctx, run.ID, run.Attempt, keeper); renewalErr != nil {
 			return renewalErr
 		}
 		if runCtx.Err() != nil {
@@ -333,6 +348,7 @@ func (e *Engine) execute(ctx context.Context, runID string) error {
 			return fmt.Errorf("persist run attempt: %w", err)
 		}
 		e.publish(run.ID, "run.started", fmt.Sprintf("attempt %d of %d started", run.Attempt, run.MaxAttempts), run.Attempt)
+		slog.InfoContext(ctx, "run attempt started", runLogAttrs(ctx, run)...)
 
 		attemptCtx, cancelAttempt := context.WithTimeout(runCtx, e.retry.AttemptTimeout)
 		result, executeErr := executeRuntimeSafely(attemptCtx, implementation, agentruntime.ExecutionRequest{
@@ -340,7 +356,7 @@ func (e *Engine) execute(ctx context.Context, runID string) error {
 		})
 		attemptContextErr := attemptCtx.Err()
 		cancelAttempt()
-		if renewalErr := e.leaseRenewalError(run.ID, run.Attempt, keeper); renewalErr != nil {
+		if renewalErr := e.leaseRenewalError(ctx, run.ID, run.Attempt, keeper); renewalErr != nil {
 			return renewalErr
 		}
 		if ctx.Err() != nil {
@@ -352,6 +368,8 @@ func (e *Engine) execute(ctx context.Context, runID string) error {
 		if errors.Is(attemptContextErr, context.DeadlineExceeded) && !errors.Is(executeErr, ErrRuntimePanic) {
 			executeErr = fmt.Errorf("%w: attempt %d exceeded %s", ErrAttemptTimeout, run.Attempt, e.retry.AttemptTimeout)
 			e.publish(run.ID, "run.attempt_timed_out", executeErr.Error(), run.Attempt)
+			attributes := append(runLogAttrs(ctx, run), "timeout", e.retry.AttemptTimeout)
+			slog.WarnContext(ctx, "run attempt timed out", attributes...)
 		}
 		if executeErr == nil {
 			if err := run.Succeed(result.Output, time.Now()); err != nil {
@@ -364,6 +382,7 @@ func (e *Engine) execute(ctx context.Context, runID string) error {
 				return fmt.Errorf("persist completed run: %w", err)
 			}
 			e.publish(run.ID, "run.succeeded", "run completed successfully", run.Attempt)
+			slog.InfoContext(ctx, "run succeeded", runLogAttrs(ctx, run)...)
 			return nil
 		}
 		if run.Attempt >= run.MaxAttempts {
@@ -372,11 +391,13 @@ func (e *Engine) execute(ctx context.Context, runID string) error {
 
 		backoff := e.backoff(run.Attempt)
 		e.publish(run.ID, "run.retrying", fmt.Sprintf("attempt %d failed; retrying in %s: %v", run.Attempt, backoff, executeErr), run.Attempt)
+		attributes := append(runLogAttrs(ctx, run), "backoff", backoff, "error", executeErr)
+		slog.WarnContext(ctx, "run attempt failed; retrying", attributes...)
 		retryTimer := time.NewTimer(backoff)
 		select {
 		case <-runCtx.Done():
 			retryTimer.Stop()
-			if renewalErr := e.leaseRenewalError(run.ID, run.Attempt, keeper); renewalErr != nil {
+			if renewalErr := e.leaseRenewalError(ctx, run.ID, run.Attempt, keeper); renewalErr != nil {
 				return renewalErr
 			}
 			if ctx.Err() != nil {
@@ -394,12 +415,14 @@ func releaseLease(lease coordination.Lease) error {
 	return lease.Release(releaseCtx)
 }
 
-func (e *Engine) leaseRenewalError(runID string, attempt int, keeper *leaseKeeper) error {
+func (e *Engine) leaseRenewalError(ctx context.Context, runID string, attempt int, keeper *leaseKeeper) error {
 	err := keeper.Err()
 	if err == nil {
 		return nil
 	}
 	e.publish(runID, "run.lease_lost", err.Error(), attempt)
+	attributes := append(observability.ContextAttrs(ctx), "run_id", runID, "attempt", attempt, "error", err)
+	slog.ErrorContext(ctx, "run execution lease lost", attributes...)
 	return err
 }
 
@@ -408,13 +431,14 @@ func executeRuntimeSafely(ctx context.Context, implementation agentruntime.Runti
 		if recovered := recover(); recovered != nil {
 			result = agentruntime.ExecutionResult{}
 			err = fmt.Errorf("%w: %v", ErrRuntimePanic, recovered)
-			slog.ErrorContext(ctx, "runtime panic recovered",
+			attributes := append(observability.ContextAttrs(ctx),
 				"run_id", request.RunID,
 				"agent_id", request.AgentID(),
 				"attempt", request.Attempt,
 				"panic", fmt.Sprint(recovered),
 				"stack", string(debug.Stack()),
 			)
+			slog.ErrorContext(ctx, "runtime panic recovered", attributes...)
 		}
 	}()
 	return implementation.Execute(ctx, request)
@@ -431,10 +455,22 @@ func (e *Engine) failRun(ctx context.Context, run domain.Run, executionFence int
 		return fmt.Errorf("persist failed run: %w", updateErr)
 	}
 	e.publish(run.ID, "run.failed", err.Error(), run.Attempt)
+	attributes := append(runLogAttrs(ctx, run), "error", err)
+	slog.ErrorContext(ctx, "run failed", attributes...)
 	if deadLetterErr := e.queue.DeadLetter(ctx, run.ID, err); deadLetterErr != nil {
 		return fmt.Errorf("dead-letter run: %w", deadLetterErr)
 	}
 	return nil
+}
+
+func runLogAttrs(ctx context.Context, run domain.Run) []any {
+	attributes := observability.ContextAttrs(ctx)
+	return append(attributes,
+		"run_id", run.ID,
+		"agent_id", run.AgentID,
+		"attempt", run.Attempt,
+		"duration_ms", run.DurationMS,
+	)
 }
 
 func (e *Engine) backoff(attempt int) time.Duration {

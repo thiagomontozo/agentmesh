@@ -5,6 +5,8 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/thiagomontozo/agentmesh/internal/observability"
 )
 
 func TestMemoryQueueReportsFull(t *testing.T) {
@@ -21,15 +23,20 @@ func TestMemoryQueueConsumesAndDeadLetters(t *testing.T) {
 	q := NewMemory(1)
 	ctx, cancel := context.WithCancel(context.Background())
 	processed := make(chan string, 1)
+	workerIDs := make(chan string, 1)
 	done := make(chan error, 1)
 	go func() {
-		done <- q.Consume(ctx, 1, func(_ context.Context, runID string) error {
+		done <- q.Consume(ctx, 1, func(workerCtx context.Context, runID string) error {
 			processed <- runID
+			workerIDs <- observability.WorkerID(workerCtx)
 			return nil
 		})
 	}()
 	if err := q.Enqueue(ctx, "run_1"); err != nil {
 		t.Fatal(err)
+	}
+	if workerID := <-workerIDs; workerID != "memory-1" {
+		t.Fatalf("expected memory-1 worker ID, got %q", workerID)
 	}
 	select {
 	case runID := <-processed:
