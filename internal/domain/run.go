@@ -27,6 +27,8 @@ type Run struct {
 	Error       string     `json:"error,omitempty"`
 	Attempt     int        `json:"attempt"`
 	MaxAttempts int        `json:"max_attempts"`
+	RequestID   string     `json:"request_id,omitempty"`
+	DurationMS  int64      `json:"duration_ms"`
 	CreatedAt   time.Time  `json:"created_at"`
 	StartedAt   *time.Time `json:"started_at,omitempty"`
 	CompletedAt *time.Time `json:"completed_at,omitempty"`
@@ -66,6 +68,7 @@ func (r *Run) Succeed(output string, at time.Time) error {
 	r.Output = output
 	r.Error = ""
 	r.CompletedAt = &at
+	r.DurationMS = r.durationMilliseconds(at)
 	return nil
 }
 
@@ -81,6 +84,7 @@ func (r *Run) Fail(err error, at time.Time) error {
 	r.Output = ""
 	r.Error = err.Error()
 	r.CompletedAt = &at
+	r.DurationMS = r.durationMilliseconds(at)
 	return nil
 }
 
@@ -93,7 +97,19 @@ func (r *Run) Cancel(at time.Time) error {
 	r.Output = ""
 	r.Error = ""
 	r.CompletedAt = &at
+	r.DurationMS = r.durationMilliseconds(at)
 	return nil
+}
+
+func (r Run) durationMilliseconds(completedAt time.Time) int64 {
+	startedAt := r.CreatedAt
+	if r.StartedAt != nil {
+		startedAt = *r.StartedAt
+	}
+	if startedAt.IsZero() || completedAt.Before(startedAt) {
+		return 0
+	}
+	return completedAt.Sub(startedAt).Milliseconds()
 }
 
 type RunEvent struct {

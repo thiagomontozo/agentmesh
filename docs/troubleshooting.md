@@ -1,5 +1,9 @@
 # Troubleshooting
 
+## Correlating an API request with asynchronous execution
+
+Capture the `X-Request-ID` response header or provide your own safe value. JSON logs preserve it as `request_id` on Run processing records and combine it with `instance_id`, `worker_id`, `run_id`, `agent_id`, and `attempt` when available. In production, configure a stable unique `AGENTMESH_INSTANCE_ID` on each replica; generated IDs change after restart.
+
 ## `unlinkat ... httpapi.test.exe` on Windows
 
 If all package tests report `ok` and the error occurs only while Go removes a temporary `.test.exe`, first treat it as Windows file locking rather than an AgentMesh failure. Antivirus scanning and indexing can briefly retain newly created executables.

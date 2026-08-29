@@ -233,6 +233,7 @@ func (m *Memory) RecoverRun(_ context.Context, id string, minimumFence int64) (b
 	m.runFences[id] = nextFence
 	run.Status = domain.RunQueued
 	run.StartedAt = nil
+	run.DurationMS = 0
 	if run.Attempt > 0 {
 		run.Attempt--
 	}

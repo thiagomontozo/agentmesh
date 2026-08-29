@@ -20,7 +20,7 @@ func TestRunSuccessfulLifecycle(t *testing.T) {
 	if err := run.Succeed("done", completed); err != nil {
 		t.Fatal(err)
 	}
-	if run.Status != RunSucceeded || run.Output != "done" || run.CompletedAt == nil {
+	if run.Status != RunSucceeded || run.Output != "done" || run.CompletedAt == nil || run.DurationMS != 1000 {
 		t.Fatalf("unexpected succeeded state: %+v", run)
 	}
 }

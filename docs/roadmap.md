@@ -41,7 +41,7 @@
 ## v0.4 — Observability and security
 - [ ] OpenTelemetry traces and metrics
 - [ ] Prometheus metrics
-- [ ] Structured request IDs
+- [x] Structured JSON logs, request correlation, instance/worker IDs, and Run duration
 - [ ] Authentication
 - [ ] RBAC
 - [ ] Audit log

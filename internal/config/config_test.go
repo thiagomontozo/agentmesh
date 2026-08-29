@@ -48,6 +48,7 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 		{name: "lease ttl is zero", key: "AGENTMESH_LEASE_TTL", value: "0s"},
 		{name: "event retention is zero", key: "AGENTMESH_EVENT_RETENTION", value: "0s"},
 		{name: "event history limit is zero", key: "AGENTMESH_EVENT_HISTORY_LIMIT", value: "0"},
+		{name: "instance ID is too long", key: "AGENTMESH_INSTANCE_ID", value: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
 	}
 
 	for _, test := range tests {
@@ -114,6 +115,7 @@ func clearEnvironment(t *testing.T) {
 		"AGENTMESH_LEASE_TTL",
 		"AGENTMESH_EVENT_RETENTION",
 		"AGENTMESH_EVENT_HISTORY_LIMIT",
+		"AGENTMESH_INSTANCE_ID",
 	} {
 		t.Setenv(key, "")
 	}

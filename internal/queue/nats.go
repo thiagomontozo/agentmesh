@@ -9,6 +9,7 @@ import (
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
+	"github.com/thiagomontozo/agentmesh/internal/observability"
 )
 
 const (
@@ -71,27 +72,31 @@ func (q *NATS) Enqueue(ctx context.Context, runID string) error {
 }
 
 func (q *NATS) Consume(ctx context.Context, workers int, handler Handler) error {
-	semaphore := make(chan struct{}, workers)
+	workerSlots := make(chan int, workers)
+	for workerID := 1; workerID <= workers; workerID++ {
+		workerSlots <- workerID
+	}
 	var wg sync.WaitGroup
 	errCh := make(chan error, 1)
 	consumeCtx, err := q.consumer.Consume(func(msg jetstream.Msg) {
 		select {
-		case semaphore <- struct{}{}:
+		case workerID := <-workerSlots:
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				defer func() { workerSlots <- workerID }()
+				workerCtx := observability.WithWorkerID(ctx, fmt.Sprintf("nats-%d", workerID))
+				if err := handler(workerCtx, string(msg.Data())); err != nil {
+					_ = msg.NakWithDelay(time.Second)
+					return
+				}
+				ackCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				_ = msg.DoubleAck(ackCtx)
+			}()
 		case <-ctx.Done():
 			return
 		}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			defer func() { <-semaphore }()
-			if err := handler(ctx, string(msg.Data())); err != nil {
-				_ = msg.NakWithDelay(time.Second)
-				return
-			}
-			ackCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			_ = msg.DoubleAck(ackCtx)
-		}()
 	}, jetstream.PullMaxMessages(workers*2), jetstream.ConsumeErrHandler(func(_ jetstream.ConsumeContext, err error) {
 		select {
 		case errCh <- err:

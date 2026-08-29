@@ -29,6 +29,7 @@ The API is available at `http://localhost:8080`. PostgreSQL migrations run autom
 | Variable | Default | Validation and effect |
 | --- | --- | --- |
 | `AGENTMESH_ADDR` | `:8080` | HTTP listen address |
+| `AGENTMESH_INSTANCE_ID` | generated | Replica identifier included in logs; configure a stable unique value in production |
 | `AGENTMESH_MODE` | `memory` | Must be `memory` or `distributed` |
 | `AGENTMESH_WORKERS` | `4` | Must be at least 1 |
 | `AGENTMESH_QUEUE_SIZE` | `128` | Bounded queue size in memory mode; must be at least 1 |
@@ -89,6 +90,7 @@ Runs interrupted by process shutdown remain recoverable. On startup, queued work
 ## Production notes
 
 - Replace the development passwords from `compose.yml`.
+- Set a unique, stable `AGENTMESH_INSTANCE_ID` for every replica so logs remain attributable across restarts.
 - Enable TLS and authentication for PostgreSQL, NATS, and Redis.
 - Do not expose dependency ports publicly.
 - Restrict who can register or change remote Agent endpoints, and apply outbound network policy to AgentMesh.

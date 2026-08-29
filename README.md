@@ -76,6 +76,8 @@ The Engine resolves the already-selected Agent's runtime through a concurrency-s
 - Lease-aware multi-replica recovery for abandoned Runs
 - Cross-replica Run events and SSE through NATS pub/sub
 - Bounded PostgreSQL event history with stable SSE event IDs and restart replay
+- JSON operational logs correlated by request, instance, worker, Run, Agent, and attempt
+- Persisted request correlation and explicit Run duration
 - Restart recovery for queued/running work
 
 ## API
@@ -139,6 +141,7 @@ With the server running in one terminal:
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `AGENTMESH_ADDR` | `:8080` | HTTP bind address |
+| `AGENTMESH_INSTANCE_ID` | generated | Stable replica name; set explicitly in production |
 | `AGENTMESH_MODE` | `memory` | `memory` or `distributed` runtime |
 | `AGENTMESH_WORKERS` | `4` | Worker goroutines |
 | `AGENTMESH_QUEUE_SIZE` | `128` | In-memory run queue capacity |
