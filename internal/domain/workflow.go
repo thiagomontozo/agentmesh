@@ -27,15 +27,20 @@ const (
 	WorkflowStepQueued    WorkflowStepStatus = "queued"
 	WorkflowStepRunning   WorkflowStepStatus = "running"
 	WorkflowStepSucceeded WorkflowStepStatus = "succeeded"
+	WorkflowStepSkipped   WorkflowStepStatus = "skipped"
 	WorkflowStepFailed    WorkflowStepStatus = "failed"
 	WorkflowStepCanceled  WorkflowStepStatus = "canceled"
 )
 
 const (
-	WorkflowInputSource    = "workflow"
-	WorkflowInputSingle    = "single"
-	WorkflowInputJSONArray = "json-array"
-	MaxWorkflowSteps       = 100
+	WorkflowInputSource          = "workflow"
+	WorkflowInputSingle          = "single"
+	WorkflowInputJSONArray       = "json-array"
+	MaxWorkflowSteps             = 100
+	WorkflowConditionEquals      = "equals"
+	WorkflowConditionNotEquals   = "not-equals"
+	WorkflowConditionContains    = "contains"
+	WorkflowConditionNotContains = "not-contains"
 )
 
 var workflowStepIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
@@ -62,6 +67,7 @@ type WorkflowStep struct {
 	InputFrom        []string           `json:"input_from,omitempty"`
 	InputAggregation string             `json:"input_aggregation,omitempty"`
 	DependsOn        []string           `json:"depends_on,omitempty"`
+	Condition        *WorkflowCondition `json:"condition,omitempty"`
 	Status           WorkflowStepStatus `json:"status"`
 	RunID            string             `json:"run_id,omitempty"`
 	Output           string             `json:"output,omitempty"`
@@ -69,6 +75,12 @@ type WorkflowStep struct {
 	CreatedAt        time.Time          `json:"created_at"`
 	StartedAt        *time.Time         `json:"started_at,omitempty"`
 	CompletedAt      *time.Time         `json:"completed_at,omitempty"`
+}
+
+type WorkflowCondition struct {
+	Source   string `json:"source"`
+	Operator string `json:"operator"`
+	Value    string `json:"value"`
 }
 
 type WorkflowEvent struct {
@@ -156,6 +168,10 @@ func (w *Workflow) InitializeForCreate(at time.Time) error {
 		step.DependsOn = normalizeWorkflowRefs(step.DependsOn)
 		step.InputFrom = normalizeWorkflowRefs(step.InputFrom)
 		step.InputAggregation = strings.ToLower(strings.TrimSpace(step.InputAggregation))
+		if step.Condition != nil {
+			step.Condition.Source = strings.ToLower(strings.TrimSpace(step.Condition.Source))
+			step.Condition.Operator = strings.ToLower(strings.TrimSpace(step.Condition.Operator))
+		}
 	}
 
 	for index := range w.Steps {
@@ -180,6 +196,24 @@ func (w Workflow) validateStep(index int, ids map[string]int) error {
 			return fmt.Errorf("step %q depends on unknown step %q", step.ID, dependency)
 		}
 		dependencies[dependency] = struct{}{}
+	}
+	if step.Condition != nil {
+		if step.Condition.Source == "" {
+			return fmt.Errorf("step %q condition requires source", step.ID)
+		}
+		if step.Condition.Source != WorkflowInputSource {
+			if _, exists := ids[step.Condition.Source]; !exists {
+				return fmt.Errorf("step %q condition has unknown source %q", step.ID, step.Condition.Source)
+			}
+			if _, isDependency := dependencies[step.Condition.Source]; !isDependency {
+				return fmt.Errorf("step %q condition source %q must be a dependency", step.ID, step.Condition.Source)
+			}
+		}
+		switch step.Condition.Operator {
+		case WorkflowConditionEquals, WorkflowConditionNotEquals, WorkflowConditionContains, WorkflowConditionNotContains:
+		default:
+			return fmt.Errorf("step %q has unsupported condition operator %q", step.ID, step.Condition.Operator)
+		}
 	}
 	if len(step.InputFrom) == 0 {
 		if strings.TrimSpace(step.Input) == "" {

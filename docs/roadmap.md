@@ -52,6 +52,7 @@
 - [x] Persisted Workflow V1 DAG model and definition API
 - [x] Sequential Workflow execution through Runs
 - [x] Workflow fan-out/fan-in execution with bounded concurrency and fail-fast cancellation
+- [x] Deterministic Workflow conditions and branching with skipped Steps
 - [ ] Authentication
 - [ ] RBAC
 - [ ] Audit log

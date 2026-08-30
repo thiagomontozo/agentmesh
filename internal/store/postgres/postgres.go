@@ -281,11 +281,14 @@ func (r *Repository) CreateWorkflow(ctx context.Context, workflow domain.Workflo
 	for position, step := range workflow.Steps {
 		if _, err := tx.Exec(ctx, `INSERT INTO workflow_steps (
 			workflow_id, id, position, agent_id, input, input_from, input_aggregation,
-			depends_on, status, run_id, output, error, created_at, started_at, completed_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
+			depends_on, condition_source, condition_operator, condition_value,
+			status, run_id, output, error, created_at, started_at, completed_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)`,
 			step.WorkflowID, step.ID, position, step.AgentID, step.Input, step.InputFrom,
-			step.InputAggregation, step.DependsOn, step.Status, nullableString(step.RunID),
-			step.Output, step.Error, step.CreatedAt, step.StartedAt, step.CompletedAt,
+			step.InputAggregation, step.DependsOn, conditionValue(step.Condition, "source"),
+			conditionValue(step.Condition, "operator"), conditionValue(step.Condition, "value"),
+			step.Status, nullableString(step.RunID), step.Output, step.Error,
+			step.CreatedAt, step.StartedAt, step.CompletedAt,
 		); err != nil {
 			return domain.Workflow{}, fmt.Errorf("insert workflow step %s: %w", step.ID, err)
 		}
@@ -451,7 +454,9 @@ func (r *Repository) ListWorkflowEvents(ctx context.Context, workflowID string, 
 
 func (r *Repository) listWorkflowSteps(ctx context.Context, workflowID string) ([]domain.WorkflowStep, error) {
 	rows, err := r.pool.Query(ctx, `SELECT id, workflow_id, agent_id, input, input_from,
-		input_aggregation, depends_on, status, COALESCE(run_id, ''), output, error,
+		input_aggregation, depends_on, COALESCE(condition_source, ''),
+		COALESCE(condition_operator, ''), COALESCE(condition_value, ''),
+		status, COALESCE(run_id, ''), output, error,
 		created_at, started_at, completed_at
 		FROM workflow_steps WHERE workflow_id = $1 ORDER BY position`, workflowID)
 	if err != nil {
@@ -461,12 +466,17 @@ func (r *Repository) listWorkflowSteps(ctx context.Context, workflowID string) (
 	steps := make([]domain.WorkflowStep, 0)
 	for rows.Next() {
 		var step domain.WorkflowStep
+		var conditionSource, conditionOperator, conditionValue string
 		if err := rows.Scan(
 			&step.ID, &step.WorkflowID, &step.AgentID, &step.Input, &step.InputFrom,
-			&step.InputAggregation, &step.DependsOn, &step.Status, &step.RunID,
+			&step.InputAggregation, &step.DependsOn, &conditionSource, &conditionOperator, &conditionValue,
+			&step.Status, &step.RunID,
 			&step.Output, &step.Error, &step.CreatedAt, &step.StartedAt, &step.CompletedAt,
 		); err != nil {
 			return nil, fmt.Errorf("scan workflow step: %w", err)
+		}
+		if conditionSource != "" {
+			step.Condition = &domain.WorkflowCondition{Source: conditionSource, Operator: conditionOperator, Value: conditionValue}
 		}
 		steps = append(steps, step)
 	}
@@ -889,6 +899,20 @@ func nullableString(value string) any {
 		return nil
 	}
 	return value
+}
+
+func conditionValue(condition *domain.WorkflowCondition, field string) any {
+	if condition == nil {
+		return nil
+	}
+	switch field {
+	case "source":
+		return condition.Source
+	case "operator":
+		return condition.Operator
+	default:
+		return condition.Value
+	}
 }
 
 func scanAgent(row rowScanner) (domain.Agent, error) {

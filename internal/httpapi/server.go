@@ -102,12 +102,13 @@ type createWorkflowRequest struct {
 }
 
 type createWorkflowStepRequest struct {
-	ID               string   `json:"id"`
-	AgentID          string   `json:"agent_id"`
-	Input            string   `json:"input"`
-	InputFrom        []string `json:"input_from"`
-	InputAggregation string   `json:"input_aggregation"`
-	DependsOn        []string `json:"depends_on"`
+	ID               string                    `json:"id"`
+	AgentID          string                    `json:"agent_id"`
+	Input            string                    `json:"input"`
+	InputFrom        []string                  `json:"input_from"`
+	InputAggregation string                    `json:"input_aggregation"`
+	DependsOn        []string                  `json:"depends_on"`
+	Condition        *domain.WorkflowCondition `json:"condition"`
 }
 
 func (s *Server) createWorkflow(w http.ResponseWriter, r *http.Request) {
@@ -122,6 +123,7 @@ func (s *Server) createWorkflow(w http.ResponseWriter, r *http.Request) {
 			ID: requested.ID, AgentID: requested.AgentID, Input: requested.Input,
 			InputFrom: requested.InputFrom, InputAggregation: requested.InputAggregation,
 			DependsOn: requested.DependsOn,
+			Condition: requested.Condition,
 		}
 	}
 	if err := workflow.InitializeForCreate(time.Now()); err != nil {
