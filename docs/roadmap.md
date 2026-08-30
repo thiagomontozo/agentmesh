@@ -54,6 +54,7 @@
 - [x] Workflow fan-out/fan-in execution with bounded concurrency and fail-fast cancellation
 - [x] Deterministic Workflow conditions and branching with skipped Steps
 - [x] Control-plane-mediated Agent-to-Agent child Runs with bounded recursion/fan-out
+- [x] Real two-replica distributed acceptance test with PostgreSQL, Redis, and NATS
 - [ ] Authentication
 - [ ] RBAC
 - [ ] Audit log
