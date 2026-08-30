@@ -6,6 +6,10 @@ AgentMesh reads configuration from environment variables. Copy `.env.example` wh
 distributed mode and shared PostgreSQL, Redis, and NATS dependencies. See
 [Process roles](process-roles.md).
 
+`AGENTMESH_WORKFLOW_LEASE_TTL` controls renewable, per-Workflow scheduler
+ownership across API replicas. See
+[Workflow scheduler ownership](workflow-scheduler-ownership.md).
+
 ## Runtime modes
 
 ### Memory

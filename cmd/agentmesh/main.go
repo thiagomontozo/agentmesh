@@ -132,7 +132,7 @@ func main() {
 		}
 		runEngine.Start(rootCtx)
 	}
-	workflowManager := workflowengine.NewWithConcurrency(repository, runEngine, cfg.WorkflowConcurrency)
+	workflowManager := workflowengine.NewWithCoordinator(repository, runEngine, coordinator, cfg.WorkflowConcurrency, cfg.WorkflowLeaseTTL)
 	if servesAPI {
 		workflowManager.Run(rootCtx)
 		if err := workflowManager.Recover(rootCtx); err != nil {

@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/thiagomontozo/agentmesh/internal/coordination"
 	"github.com/thiagomontozo/agentmesh/internal/domain"
 	"github.com/thiagomontozo/agentmesh/internal/engine"
 	"github.com/thiagomontozo/agentmesh/internal/store"
@@ -19,6 +20,7 @@ import (
 
 const (
 	defaultPollInterval = 25 * time.Millisecond
+	defaultLeaseTTL     = 30 * time.Second
 	eventRetention      = 7 * 24 * time.Hour
 	eventHistoryLimit   = 1000
 )
@@ -28,6 +30,9 @@ type Manager struct {
 	engine      *engine.Engine
 	poll        time.Duration
 	concurrency int
+	coordinator coordination.Coordinator
+	leaseTTL    time.Duration
+	scan        time.Duration
 
 	mu     sync.Mutex
 	ctx    context.Context
@@ -40,16 +45,52 @@ func New(repository store.Repository, runEngine *engine.Engine) *Manager {
 }
 
 func NewWithConcurrency(repository store.Repository, runEngine *engine.Engine, concurrency int) *Manager {
+	return NewWithCoordinator(repository, runEngine, coordination.NewMemory(), concurrency, defaultLeaseTTL)
+}
+
+func NewWithCoordinator(repository store.Repository, runEngine *engine.Engine, coordinator coordination.Coordinator, concurrency int, leaseTTL time.Duration) *Manager {
 	if concurrency < 1 {
 		concurrency = 1
 	}
-	return &Manager{store: repository, engine: runEngine, poll: defaultPollInterval, concurrency: concurrency, active: make(map[string]struct{})}
+	if coordinator == nil {
+		coordinator = coordination.NewMemory()
+	}
+	if leaseTTL <= 0 {
+		leaseTTL = defaultLeaseTTL
+	}
+	scan := leaseTTL / 2
+	if scan > 5*time.Second {
+		scan = 5 * time.Second
+	}
+	if scan < 25*time.Millisecond {
+		scan = 25 * time.Millisecond
+	}
+	return &Manager{
+		store: repository, engine: runEngine, poll: defaultPollInterval, concurrency: concurrency,
+		coordinator: coordinator, leaseTTL: leaseTTL, scan: scan, active: make(map[string]struct{}),
+	}
 }
 
 func (m *Manager) Run(ctx context.Context) {
 	m.mu.Lock()
 	m.ctx = ctx
+	m.wg.Add(1)
 	m.mu.Unlock()
+	go func() {
+		defer m.wg.Done()
+		ticker := time.NewTicker(m.scan)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if err := m.Recover(ctx); err != nil && ctx.Err() == nil {
+					slog.ErrorContext(ctx, "workflow scheduler scan failed", "error", err)
+				}
+			}
+		}
+	}()
 }
 
 func (m *Manager) Stop() { m.wg.Wait() }
@@ -140,10 +181,63 @@ func (m *Manager) schedule(id string) {
 			m.mu.Unlock()
 			m.wg.Done()
 		}()
-		if err := m.reconcile(ctx, id); err != nil && ctx.Err() == nil {
+		if err := m.reconcileWithOwnership(ctx, id); err != nil && ctx.Err() == nil {
 			slog.ErrorContext(ctx, "workflow reconciliation stopped", "workflow_id", id, "error", err)
 		}
 	}()
+}
+
+func (m *Manager) reconcileWithOwnership(ctx context.Context, id string) error {
+	lease, acquired, err := m.coordinator.Acquire(ctx, "workflow:"+id, m.leaseTTL)
+	if err != nil {
+		return fmt.Errorf("acquire workflow scheduler lease: %w", err)
+	}
+	if !acquired {
+		return nil
+	}
+	ownedCtx, cancelOwnership := context.WithCancel(ctx)
+	renewed := make(chan error, 1)
+	go func() {
+		interval := m.leaseTTL / 3
+		if interval <= 0 {
+			interval = m.leaseTTL
+		}
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ownedCtx.Done():
+				renewed <- nil
+				return
+			case <-ticker.C:
+				renewCtx, cancel := context.WithTimeout(ownedCtx, interval)
+				err := lease.Renew(renewCtx, m.leaseTTL)
+				cancel()
+				if err != nil {
+					if ownedCtx.Err() != nil {
+						renewed <- nil
+						return
+					}
+					cancelOwnership()
+					renewed <- err
+					return
+				}
+			}
+		}
+	}()
+	reconcileErr := m.reconcile(ownedCtx, id)
+	cancelOwnership()
+	renewErr := <-renewed
+	releaseCtx, cancelRelease := context.WithTimeout(context.Background(), 2*time.Second)
+	releaseErr := lease.Release(releaseCtx)
+	cancelRelease()
+	if renewErr != nil {
+		return fmt.Errorf("workflow scheduler lease lost: %w", renewErr)
+	}
+	if releaseErr != nil {
+		return fmt.Errorf("release workflow scheduler lease: %w", releaseErr)
+	}
+	return reconcileErr
 }
 
 func (m *Manager) reconcile(ctx context.Context, id string) error {

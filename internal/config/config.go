@@ -35,6 +35,7 @@ type Config struct {
 	AgentHealthTimeout   time.Duration
 	AgentHealthWorkers   int
 	WorkflowConcurrency  int
+	WorkflowLeaseTTL     time.Duration
 	AgentCallMaxDepth    int
 	AgentCallMaxChildren int
 	HTTPRequireHTTPS     bool
@@ -181,6 +182,13 @@ func Load() (Config, error) {
 	if workflowConcurrency < 1 {
 		return Config{}, fmt.Errorf("AGENTMESH_WORKFLOW_CONCURRENCY must be >= 1")
 	}
+	workflowLeaseTTL, err := durationEnv("AGENTMESH_WORKFLOW_LEASE_TTL", 30*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+	if workflowLeaseTTL <= 0 {
+		return Config{}, fmt.Errorf("AGENTMESH_WORKFLOW_LEASE_TTL must be > 0")
+	}
 	agentCallMaxDepth, err := intEnv("AGENTMESH_AGENT_CALL_MAX_DEPTH", 8)
 	if err != nil {
 		return Config{}, err
@@ -257,6 +265,7 @@ func Load() (Config, error) {
 		AgentHealthTimeout:   agentHealthTimeout,
 		AgentHealthWorkers:   agentHealthWorkers,
 		WorkflowConcurrency:  workflowConcurrency,
+		WorkflowLeaseTTL:     workflowLeaseTTL,
 		AgentCallMaxDepth:    agentCallMaxDepth,
 		AgentCallMaxChildren: agentCallMaxChildren,
 		HTTPRequireHTTPS:     httpRequireHTTPS,

@@ -65,6 +65,7 @@ services:
       AGENTMESH_HTTP_ALLOW_PRIVATE_NETWORKS: "true"
       AGENTMESH_HTTP_ALLOW_LOOPBACK: "true"
       AGENTMESH_HTTP_ALLOW_LINK_LOCAL: "false"
+      AGENTMESH_WORKFLOW_LEASE_TTL: "30s"
       AGENTMESH_DATABASE_URL: "postgres://agentmesh:agentmesh@postgres:5432/agentmesh?sslmode=disable"
       AGENTMESH_NATS_URL: "nats://nats:4222"
       AGENTMESH_REDIS_URL: "redis://redis:6379/0"
