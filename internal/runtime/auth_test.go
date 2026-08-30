@@ -3,7 +3,10 @@ package runtime_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -83,6 +86,51 @@ func TestEnvironmentAuthenticatorRejectsMissingOrUnsafeSecret(t *testing.T) {
 		_, err := agentruntime.NewEnvironmentAuthenticator(raw, func(string) (string, bool) { return secret, secret != "" })
 		if !errors.Is(err, agentruntime.ErrAuthentication) || strings.Contains(err.Error(), secret) && secret != "" {
 			t.Fatalf("unexpected safe error for secret %q: %v", secret, err)
+		}
+	}
+}
+
+func TestAuthenticatorReloadsEnvironmentSecretOnEveryRequest(t *testing.T) {
+	secrets := map[string]string{"TOKEN": "first"}
+	authenticator, err := agentruntime.NewEnvironmentAuthenticator(
+		`{"agt_1":{"type":"bearer","secret_env":"TOKEN"}}`,
+		func(name string) (string, bool) { value, ok := secrets[name]; return value, ok },
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"first", "rotated"} {
+		secrets["TOKEN"] = want
+		request, _ := http.NewRequest(http.MethodPost, "http://agent/v1/runs", nil)
+		if err := authenticator.Authenticate(context.Background(), domain.Agent{ID: "agt_1"}, request); err != nil {
+			t.Fatal(err)
+		}
+		if got := request.Header.Get("Authorization"); got != "Bearer "+want {
+			t.Fatalf("got %q, want rotated value %q", got, want)
+		}
+	}
+}
+
+func TestAuthenticatorReloadsMountedSecretFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "agent-token")
+	if err := os.WriteFile(path, []byte("first\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	raw := fmt.Sprintf(`{"agt_1":{"type":"api_key","secret_file":%q}}`, path)
+	authenticator, err := agentruntime.NewReloadingAuthenticator(raw, agentruntime.NewEnvironmentFileSecretProvider(os.LookupEnv))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"first", "rotated"} {
+		if err := os.WriteFile(path, []byte(want+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		request, _ := http.NewRequest(http.MethodPost, "http://agent/v1/runs", nil)
+		if err := authenticator.Authenticate(context.Background(), domain.Agent{ID: "agt_1"}, request); err != nil {
+			t.Fatal(err)
+		}
+		if got := request.Header.Get("X-API-Key"); got != want {
+			t.Fatalf("got %q, want rotated file value %q", got, want)
 		}
 	}
 }

@@ -50,6 +50,7 @@ type Config struct {
 	APIAuthConfig        string
 	AuditRetention       time.Duration
 	AuditMaxEvents       int
+	MetricsAddr          string
 }
 
 func Load() (Config, error) {
@@ -291,6 +292,7 @@ func Load() (Config, error) {
 		APIAuthConfig:        stringEnv("AGENTMESH_API_AUTH_CONFIG", ""),
 		AuditRetention:       auditRetention,
 		AuditMaxEvents:       auditMaxEvents,
+		MetricsAddr:          stringEnv("AGENTMESH_METRICS_ADDR", ""),
 	}, nil
 }
 

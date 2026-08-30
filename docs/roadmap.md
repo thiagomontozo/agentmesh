@@ -40,7 +40,7 @@
 
 ## v0.4 — Observability and security
 - [ ] OpenTelemetry traces and metrics
-- [ ] Prometheus metrics
+- [x] Bounded Prometheus operational metrics
 - [x] Structured JSON logs, request correlation, instance/worker IDs, and Run duration
 - [x] Bounded background health checks for remote HTTP Agents
 - [x] Versioned Agent update/delete with dependency protection
@@ -58,6 +58,7 @@
 - [x] API/Worker process separation architectural analysis (no implementation)
 - [x] Policy-controlled HTTP Runtime security and SSRF hardening
 - [x] Outbound Agent Bearer/API-key authentication abstraction
+- [x] Request-time secret provider with mounted-file rotation
 - [x] Formal Agent Protocol version compatibility and unsupported-version errors
 - [x] Opt-in stable effect idempotency across external Agent retries
 - [x] Evidence-based architectural reassessment after runtime, routing, Workflow, and distributed increments

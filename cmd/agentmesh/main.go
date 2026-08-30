@@ -21,6 +21,7 @@ import (
 	"github.com/thiagomontozo/agentmesh/internal/engine"
 	"github.com/thiagomontozo/agentmesh/internal/events"
 	"github.com/thiagomontozo/agentmesh/internal/httpapi"
+	metricspkg "github.com/thiagomontozo/agentmesh/internal/metrics"
 	"github.com/thiagomontozo/agentmesh/internal/queue"
 	agentruntime "github.com/thiagomontozo/agentmesh/internal/runtime"
 	"github.com/thiagomontozo/agentmesh/internal/store"
@@ -88,10 +89,19 @@ func main() {
 		coordinator = coordination.NewMemory()
 		eventBus = events.NewBus()
 	}
+	metricsRegistry := metricspkg.New()
+	eventBus = metricspkg.WrapBroker(eventBus, metricsRegistry)
+	apiAuthenticator, err := apiauth.New(cfg.APIAuthConfig, os.LookupEnv)
+	if err != nil {
+		logger.Error("API authentication configuration failed", "error", err)
+		os.Exit(1)
+	}
 
 	executor := engine.DemoExecutor{Delay: cfg.ExecutionDelay}
 	runtimeResolver := agentruntime.NewRegistry(agentruntime.AdaptLegacy(executor))
-	authenticator, err := agentruntime.NewEnvironmentAuthenticator(cfg.AgentAuthConfig, os.LookupEnv)
+	authenticator, err := agentruntime.NewReloadingAuthenticator(
+		cfg.AgentAuthConfig, agentruntime.NewEnvironmentFileSecretProvider(os.LookupEnv),
+	)
 	if err != nil {
 		logger.Error("Agent authentication configuration failed", "error", err)
 		os.Exit(1)
@@ -143,6 +153,7 @@ func main() {
 	}
 	var healthService *agenthealth.Service
 	var server *http.Server
+	var metricsServer *http.Server
 	var serverErrors <-chan error
 	if servesAPI {
 		healthService, err = agenthealth.New(repository, nil, agenthealth.Config{
@@ -156,12 +167,8 @@ func main() {
 		healthService.Start(rootCtx)
 
 		api := httpapi.NewWithInstanceID(repository, runEngine, eventBus, instanceID)
-		apiAuthenticator, authErr := apiauth.New(cfg.APIAuthConfig, os.LookupEnv)
-		if authErr != nil {
-			logger.Error("API authentication configuration failed", "error", authErr)
-			os.Exit(1)
-		}
 		api.SetAPISecurity(apiAuthenticator, cfg.AuditRetention, cfg.AuditMaxEvents)
+		api.SetMetrics(metricsRegistry)
 		api.SetAgentHealth(healthService)
 		api.SetWorkflowController(workflowManager)
 		api.SetAgentCallLimits(cfg.AgentCallMaxDepth, cfg.AgentCallMaxChildren)
@@ -179,6 +186,18 @@ func main() {
 		}()
 	} else {
 		logger.Info("agentmesh worker started", "role", cfg.Role, "workers", cfg.Workers)
+		if cfg.MetricsAddr != "" {
+			metricsServer = &http.Server{
+				Addr: cfg.MetricsAddr, Handler: apiAuthenticator.Middleware(metricsRegistry.Handler(repository)),
+				ReadHeaderTimeout: 5 * time.Second,
+			}
+			errorsChannel := make(chan error, 1)
+			serverErrors = errorsChannel
+			go func() {
+				logger.Info("agentmesh worker metrics started", "addr", cfg.MetricsAddr)
+				errorsChannel <- metricsServer.ListenAndServe()
+			}()
+		}
 	}
 	var engineErrors <-chan error
 	if runsWork {
@@ -202,6 +221,13 @@ func main() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 		if err := server.Shutdown(shutdownCtx); err != nil {
 			logger.Error("http shutdown failed", "error", err)
+		}
+		cancel()
+	}
+	if metricsServer != nil {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
+		if err := metricsServer.Shutdown(shutdownCtx); err != nil {
+			logger.Error("metrics shutdown failed", "error", err)
 		}
 		cancel()
 	}
