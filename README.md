@@ -237,7 +237,8 @@ docker compose down -v
 
 The suite includes two independent logical AgentMesh replicas connected to the
 same PostgreSQL, Redis, and NATS services. See [Multi-replica integration test](docs/multi-replica-testing.md)
-for the guarantees exercised and the remaining process/network test boundary.
+for the distributed guarantees, and [Resilience and load testing](docs/resilience-and-load-testing.md)
+for dependency outage/recovery and concurrent process-load coverage.
 
 ## Docker
 
@@ -270,6 +271,7 @@ docs/                   roadmap and architecture notes
 - [Multi-replica integration test](docs/multi-replica-testing.md)
 - [API and Worker separation analysis](docs/api-worker-separation-analysis.md)
 - [Process roles and process-level replica test](docs/process-roles.md)
+- [Resilience and load testing](docs/resilience-and-load-testing.md)
 - [Workflow scheduler ownership](docs/workflow-scheduler-ownership.md)
 - [HTTP Runtime security](docs/http-runtime-security.md)
 - [Agent request authentication](docs/agent-authentication.md)

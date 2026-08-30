@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -111,6 +112,142 @@ func TestSeparateProcessesExecutePreserveAndRecoverRuns(t *testing.T) {
 	if !strings.Contains(recovered.Output, "process-recovery") || !recovery.contains(abandoned.ID) {
 		t.Fatalf("replacement worker did not recover abandoned Run: run=%+v logs=%s", recovered, recovery.outputString())
 	}
+}
+
+func TestSeparateProcessesSustainConcurrentLoadWithoutDuplicateAttempts(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 75*time.Second)
+	defer cancel()
+	binary := buildAgentMeshBinary(t, ctx)
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	apiPort := reserveTCPPort(t)
+	workerAPort := reserveTCPPort(t)
+	workerBPort := reserveTCPPort(t)
+	apiURL := "http://127.0.0.1:" + apiPort
+	common := map[string]string{
+		"AGENTMESH_MODE": "distributed", "AGENTMESH_DATABASE_URL": env("AGENTMESH_DATABASE_URL", "postgres://agentmesh:agentmesh@localhost:5432/agentmesh?sslmode=disable"),
+		"AGENTMESH_NATS_URL": env("AGENTMESH_NATS_URL", "nats://localhost:4222"), "AGENTMESH_REDIS_URL": env("AGENTMESH_REDIS_URL", "redis://localhost:6379/0"),
+		"AGENTMESH_LEASE_TTL": "2s", "AGENTMESH_NATS_ACK_WAIT": "5s", "AGENTMESH_ATTEMPT_TIMEOUT": "10s",
+		"AGENTMESH_MAX_ATTEMPTS": "1", "AGENTMESH_SHUTDOWN_TIMEOUT": "3s", "AGENTMESH_AGENT_HEALTH_INTERVAL": "1h",
+		"AGENTMESH_EXECUTION_DELAY": "25ms", "AGENTMESH_WORKERS": "4",
+	}
+	api := startAgentMeshProcess(t, ctx, binary, cloneEnvironment(common, map[string]string{
+		"AGENTMESH_ROLE": "api", "AGENTMESH_ADDR": "127.0.0.1:" + apiPort, "AGENTMESH_INSTANCE_ID": "load-api-" + suffix,
+	}), "agentmesh API started")
+	defer api.stop(false)
+	waitHTTPReady(t, ctx, apiURL+"/readyz")
+
+	workerA := startAgentMeshProcess(t, ctx, binary, cloneEnvironment(common, map[string]string{
+		"AGENTMESH_ROLE": "worker", "AGENTMESH_INSTANCE_ID": "load-worker-a-" + suffix,
+		"AGENTMESH_METRICS_ADDR": "127.0.0.1:" + workerAPort,
+	}), "agentmesh worker started")
+	defer workerA.stop(false)
+	workerB := startAgentMeshProcess(t, ctx, binary, cloneEnvironment(common, map[string]string{
+		"AGENTMESH_ROLE": "worker", "AGENTMESH_INSTANCE_ID": "load-worker-b-" + suffix,
+		"AGENTMESH_METRICS_ADDR": "127.0.0.1:" + workerBPort,
+	}), "agentmesh worker started")
+	defer workerB.stop(false)
+	waitHTTPReady(t, ctx, "http://127.0.0.1:"+workerAPort+"/metrics")
+	waitHTTPReady(t, ctx, "http://127.0.0.1:"+workerBPort+"/metrics")
+
+	agent := createProcessAgent(t, apiURL, "load-"+suffix)
+	const runCount = 120
+	type submission struct {
+		run domain.Run
+		err error
+	}
+	start := make(chan struct{})
+	results := make(chan submission, runCount)
+	client := &http.Client{Timeout: 8 * time.Second}
+	for index := 0; index < runCount; index++ {
+		go func(index int) {
+			<-start
+			run, err := submitProcessRun(client, apiURL, agent.ID, fmt.Sprintf("load-%03d", index), fmt.Sprintf("load-%s-%03d", suffix, index))
+			results <- submission{run: run, err: err}
+		}(index)
+	}
+	close(start)
+
+	runs := make([]domain.Run, 0, runCount)
+	identifiers := make(map[string]struct{}, runCount)
+	for index := 0; index < runCount; index++ {
+		select {
+		case result := <-results:
+			if result.err != nil {
+				t.Fatalf("submit concurrent Run: %v", result.err)
+			}
+			if _, duplicate := identifiers[result.run.ID]; duplicate {
+				t.Fatalf("different idempotency keys returned duplicate Run ID %s", result.run.ID)
+			}
+			identifiers[result.run.ID] = struct{}{}
+			runs = append(runs, result.run)
+		case <-ctx.Done():
+			t.Fatal("timed out submitting concurrent Runs")
+		}
+	}
+	for _, run := range runs {
+		completed := waitProcessRun(t, ctx, apiURL, run.ID, domain.RunSucceeded)
+		if completed.Attempt != 1 {
+			t.Fatalf("Run %s used %d attempts under normal load", run.ID, completed.Attempt)
+		}
+	}
+
+	startedA := readProcessMetric(t, "http://127.0.0.1:"+workerAPort+"/metrics", `agentmesh_run_events_total{type="run.started"}`)
+	startedB := readProcessMetric(t, "http://127.0.0.1:"+workerBPort+"/metrics", `agentmesh_run_events_total{type="run.started"}`)
+	if startedA+startedB != runCount {
+		t.Fatalf("workers emitted %.0f run.started events for %d Runs (worker A=%.0f worker B=%.0f)", startedA+startedB, runCount, startedA, startedB)
+	}
+}
+
+func submitProcessRun(client *http.Client, baseURL, agentID, input, key string) (domain.Run, error) {
+	payload, err := json.Marshal(map[string]string{"agent_id": agentID, "input": input})
+	if err != nil {
+		return domain.Run{}, err
+	}
+	request, err := http.NewRequest(http.MethodPost, baseURL+"/api/v1/runs", bytes.NewReader(payload))
+	if err != nil {
+		return domain.Run{}, err
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Idempotency-Key", key)
+	response, err := client.Do(request)
+	if err != nil {
+		return domain.Run{}, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusAccepted && response.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(response.Body)
+		return domain.Run{}, fmt.Errorf("status=%d body=%s", response.StatusCode, body)
+	}
+	var run domain.Run
+	if err := json.NewDecoder(response.Body).Decode(&run); err != nil {
+		return domain.Run{}, err
+	}
+	return run, nil
+}
+
+func readProcessMetric(t *testing.T, url, name string) float64 {
+	t.Helper()
+	response, err := http.Get(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(string(body), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 2 && fields[0] == name {
+			value, err := strconv.ParseFloat(fields[1], 64)
+			if err != nil {
+				t.Fatalf("parse metric %s: %v", name, err)
+			}
+			return value
+		}
+	}
+	t.Fatalf("metric %s not found in %s", name, body)
+	return 0
 }
 
 type processOutput struct {

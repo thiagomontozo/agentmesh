@@ -69,6 +69,7 @@
 - [x] RBAC with cryptographic Agent-to-Agent caller identity
 - [x] Bounded audit log
 - [x] Mixed-version rolling-upgrade and schema compatibility CI
+- [x] Dependency outage/recovery and sustained multi-worker load CI
 
 ## v0.5 — UI and cloud native
 - [ ] Next.js dashboard
