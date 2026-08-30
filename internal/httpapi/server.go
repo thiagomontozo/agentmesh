@@ -34,6 +34,12 @@ type Server struct {
 	agentHealth agenthealth.Registry
 	discovery   *discovery.Service
 	agentRouter *agentrouter.Router
+	workflows   workflowController
+}
+
+type workflowController interface {
+	StartWorkflow(ctx context.Context, id string) (domain.Workflow, error)
+	CancelWorkflow(ctx context.Context, id string) (domain.Workflow, error)
 }
 
 func New(s store.Repository, e *engine.Engine, bus events.Broker) *Server {
@@ -59,6 +65,10 @@ func (s *Server) SetAgentHealth(registry agenthealth.Registry) {
 	}
 }
 
+func (s *Server) SetWorkflowController(controller workflowController) {
+	s.workflows = controller
+}
+
 func (s *Server) Handler() http.Handler {
 	return requestContextMiddleware(s.instanceID, loggingMiddleware(recoverMiddleware(s.mux)))
 }
@@ -81,6 +91,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/workflows", s.listWorkflows)
 	s.mux.HandleFunc("POST /api/v1/workflows", s.createWorkflow)
 	s.mux.HandleFunc("GET /api/v1/workflows/{id}", s.getWorkflow)
+	s.mux.HandleFunc("POST /api/v1/workflows/{id}/start", s.startWorkflow)
+	s.mux.HandleFunc("POST /api/v1/workflows/{id}/cancel", s.cancelWorkflow)
+	s.mux.HandleFunc("GET /api/v1/workflows/{id}/events", s.workflowEvents)
 }
 
 type createWorkflowRequest struct {
@@ -153,6 +166,101 @@ func (s *Server) listWorkflows(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": workflows})
+}
+
+func (s *Server) startWorkflow(w http.ResponseWriter, r *http.Request) {
+	if s.workflows == nil {
+		writeError(w, http.StatusServiceUnavailable, "workflow execution is unavailable")
+		return
+	}
+	workflow, err := s.workflows.StartWorkflow(r.Context(), r.PathValue("id"))
+	if errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "workflow not found")
+		return
+	}
+	if errors.Is(err, store.ErrConflict) || errors.Is(err, domain.ErrWorkflowNotCancelable) || strings.Contains(errString(err), "cannot start") {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusAccepted, workflow)
+}
+
+func (s *Server) cancelWorkflow(w http.ResponseWriter, r *http.Request) {
+	if s.workflows == nil {
+		writeError(w, http.StatusServiceUnavailable, "workflow execution is unavailable")
+		return
+	}
+	workflow, err := s.workflows.CancelWorkflow(r.Context(), r.PathValue("id"))
+	if errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "workflow not found")
+		return
+	}
+	if errors.Is(err, domain.ErrWorkflowNotCancelable) || errors.Is(err, store.ErrConflict) {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not cancel workflow")
+		return
+	}
+	writeJSON(w, http.StatusOK, workflow)
+}
+
+func (s *Server) workflowEvents(w http.ResponseWriter, r *http.Request) {
+	workflowID := r.PathValue("id")
+	if _, err := s.store.GetWorkflow(r.Context(), workflowID); errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "workflow not found")
+		return
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "streaming is not supported")
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	seen := make(map[string]struct{})
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		events, err := s.store.ListWorkflowEvents(r.Context(), workflowID, 1000)
+		if err != nil {
+			return
+		}
+		for _, event := range events {
+			if _, exists := seen[event.ID]; exists {
+				continue
+			}
+			seen[event.ID] = struct{}{}
+			payload, err := json.Marshal(event)
+			if err != nil {
+				return
+			}
+			_, _ = fmt.Fprintf(w, "id: %s\nevent: %s\ndata: %s\n\n", event.ID, event.Type, payload)
+			flusher.Flush()
+		}
+		workflow, err := s.store.GetWorkflow(r.Context(), workflowID)
+		if err != nil || workflow.IsTerminal() {
+			return
+		}
+		select {
+		case <-r.Context().Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+func errString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
 
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) {

@@ -208,7 +208,29 @@ curl http://localhost:8080/api/v1/workflows
 curl http://localhost:8080/api/v1/workflows/wf_REPLACE_ME
 ```
 
-This version persists definitions only. Returned Workflow and Step states remain `pending`; creating a definition does not create or enqueue Runs.
+Creating a definition does not execute it. Start a chain-shaped Workflow explicitly:
+
+```bash
+curl -X POST http://localhost:8080/api/v1/workflows/wf_REPLACE_ME/start
+```
+
+The start response is `202 Accepted`. Workflow state progresses `pending → running → succeeded|failed|canceled`; Step state progresses `pending → queued → running → succeeded|failed|canceled`. Each Step becomes an ordinary Run and therefore inherits configured retries, timeout, runtime selection, leases, recovery, cancellation, and observability. A Step with multiple dependencies, multiple dependents, or multiple input sources returns `422` at start in this sequential version.
+
+Cancel a pending or running Workflow:
+
+```bash
+curl -X POST http://localhost:8080/api/v1/workflows/wf_REPLACE_ME/cancel
+```
+
+Cancellation persists Workflow/Step state first and cancels any active Run through the normal Run cancellation path. Terminal Workflows return `409 Conflict`.
+
+Stream persisted lifecycle events:
+
+```bash
+curl -N http://localhost:8080/api/v1/workflows/wf_REPLACE_ME/events
+```
+
+Events include `workflow.started`, `workflow.step_queued`, and one terminal `workflow.succeeded`, `workflow.failed`, or `workflow.canceled`. Frames contain stable `event_id`, `workflow_id`, optional `step_id`/`run_id`, type, message, and timestamp. History is bounded to 1,000 events and seven days. The endpoint polls persistent history, so a client on one replica can observe state produced by another; there is not yet a live NATS Workflow-event transport.
 
 ## Request validation
 

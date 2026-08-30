@@ -141,7 +141,17 @@ This is composition groundwork, not a workflow engine. Parent completion does no
 
 Memory stores isolated deep copies. PostgreSQL migration `013_workflows.sql` stores the Workflow and its ordered Steps transactionally with Agent foreign keys. Agents referenced by Workflow definitions cannot be deleted. The cached repository deliberately forwards Workflow reads to the authoritative store rather than introducing a second invalidation surface.
 
-The API can create, list, and fetch definitions. At this increment every Workflow and Step remains `pending`: there is no start endpoint, scheduler, Run creation, output propagation, recovery, or cancellation yet. Runtime state columns are present to preserve one representation when execution is added, but their lifecycle cannot be mutated through the API.
+The API can create, list, and fetch definitions. Definitions remain inert until explicitly started.
+
+## Sequential Workflow execution
+
+`internal/workflow.Manager` accepts only a DAG that is a single connected chain: one root, at most one dependency, one dependent, and one input source per Step. A fan-out or fan-in definition remains persistable but its start request is rejected until the parallel scheduler is enabled.
+
+The manager reconciles persisted Workflow state and creates one idempotent Run per Step using the key `workflow:{workflow_id}:step:{step_id}`. It assigns the preceding Step Run as `parent_run_id`, so existing root lineage remains authoritative. Literal input, top-level Workflow input, or one completed Step output is resolved explicitly. The manager then enqueues the Run and observes its persisted lifecycle; Engine continues to own worker concurrency, runtime resolution, attempt timeout, retries, panic isolation, leases, fencing, and Run events.
+
+Step failure fails the Workflow and marks remaining pending Steps canceled. Explicit Workflow cancellation marks non-terminal Steps canceled and calls the existing Engine cancellation path for the active Run. A succeeded Step output is persisted before the next Run is created. Stable idempotency keys and `ListRunningWorkflows` allow a restarted manager to resume without creating a second Run for an assigned Step. Application startup recovers queued/running Runs before recovering Workflow reconciliation.
+
+Workflow lifecycle events are stored in Memory or the bounded PostgreSQL `workflow_events` table. The Workflow SSE endpoint polls this authoritative history, which makes events visible across API replicas without adding a second NATS subject. Polling and client writes are outside execution goroutines, so a slow SSE client cannot block Workflow progress. At this stage only a single sequential Step can be active; fan-out/fan-in is intentionally absent.
 
 ## Agent Registry lifecycle
 

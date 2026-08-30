@@ -1,11 +1,14 @@
 package domain
 
 import (
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
 	"time"
 )
+
+var ErrWorkflowNotCancelable = errors.New("workflow cannot be canceled")
 
 type WorkflowStatus string
 
@@ -66,6 +69,49 @@ type WorkflowStep struct {
 	CreatedAt        time.Time          `json:"created_at"`
 	StartedAt        *time.Time         `json:"started_at,omitempty"`
 	CompletedAt      *time.Time         `json:"completed_at,omitempty"`
+}
+
+type WorkflowEvent struct {
+	ID         string    `json:"event_id"`
+	WorkflowID string    `json:"workflow_id"`
+	StepID     string    `json:"step_id,omitempty"`
+	RunID      string    `json:"run_id,omitempty"`
+	Type       string    `json:"type"`
+	Message    string    `json:"message"`
+	Timestamp  time.Time `json:"timestamp"`
+}
+
+func (w Workflow) IsTerminal() bool {
+	return w.Status == WorkflowSucceeded || w.Status == WorkflowFailed || w.Status == WorkflowCanceled
+}
+
+func (w Workflow) ValidateSequential() error {
+	if len(w.Steps) == 0 {
+		return fmt.Errorf("workflow has no steps")
+	}
+	dependents := make(map[string]int, len(w.Steps))
+	roots := 0
+	for _, step := range w.Steps {
+		if len(step.DependsOn) > 1 {
+			return fmt.Errorf("step %q has multiple dependencies; fan-in is not supported by sequential execution", step.ID)
+		}
+		if len(step.InputFrom) > 1 {
+			return fmt.Errorf("step %q has multiple input sources; fan-in is not supported by sequential execution", step.ID)
+		}
+		if len(step.DependsOn) == 0 {
+			roots++
+			continue
+		}
+		dependency := step.DependsOn[0]
+		dependents[dependency]++
+		if dependents[dependency] > 1 {
+			return fmt.Errorf("step %q has multiple dependents; fan-out is not supported by sequential execution", dependency)
+		}
+	}
+	if roots != 1 {
+		return fmt.Errorf("sequential workflow requires exactly one root step")
+	}
+	return nil
 }
 
 func (w *Workflow) InitializeForCreate(at time.Time) error {

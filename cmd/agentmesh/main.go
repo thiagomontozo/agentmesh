@@ -24,6 +24,7 @@ import (
 	agentruntime "github.com/thiagomontozo/agentmesh/internal/runtime"
 	"github.com/thiagomontozo/agentmesh/internal/store"
 	postgresstore "github.com/thiagomontozo/agentmesh/internal/store/postgres"
+	workflowengine "github.com/thiagomontozo/agentmesh/internal/workflow"
 )
 
 func main() {
@@ -109,6 +110,12 @@ func main() {
 		os.Exit(1)
 	}
 	runEngine.Start(rootCtx)
+	workflowManager := workflowengine.New(repository, runEngine)
+	workflowManager.Run(rootCtx)
+	if err := workflowManager.Recover(rootCtx); err != nil {
+		logger.Error("workflow recovery failed", "error", err)
+		os.Exit(1)
+	}
 	healthService, err := agenthealth.New(repository, nil, agenthealth.Config{
 		Path: cfg.AgentHealthPath, Interval: cfg.AgentHealthInterval,
 		Timeout: cfg.AgentHealthTimeout, Workers: cfg.AgentHealthWorkers,
@@ -122,6 +129,7 @@ func main() {
 
 	api := httpapi.NewWithInstanceID(repository, runEngine, eventBus, instanceID)
 	api.SetAgentHealth(healthService)
+	api.SetWorkflowController(workflowManager)
 	server := &http.Server{
 		Addr:              cfg.Addr,
 		Handler:           api.Handler(),
@@ -152,6 +160,7 @@ func main() {
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		logger.Error("http shutdown failed", "error", err)
 	}
+	workflowManager.Stop()
 	runEngine.Stop()
 	logger.Info("agentmesh stopped")
 }

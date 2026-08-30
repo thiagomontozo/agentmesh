@@ -59,6 +59,10 @@ type WorkflowRepository interface {
 	CreateWorkflow(ctx context.Context, workflow domain.Workflow) (domain.Workflow, error)
 	GetWorkflow(ctx context.Context, id string) (domain.Workflow, error)
 	ListWorkflows(ctx context.Context) ([]domain.Workflow, error)
+	UpdateWorkflow(ctx context.Context, workflow domain.Workflow, expectedVersion int64) (domain.Workflow, error)
+	ListRunningWorkflows(ctx context.Context) ([]domain.Workflow, error)
+	AppendWorkflowEvent(ctx context.Context, event domain.WorkflowEvent, retention time.Duration, maxPerWorkflow int) error
+	ListWorkflowEvents(ctx context.Context, workflowID string, limit int) ([]domain.WorkflowEvent, error)
 }
 
 type Repository interface {

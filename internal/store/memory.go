@@ -21,6 +21,7 @@ type Memory struct {
 	runEvents       map[string][]domain.RunEvent
 	idempotencyKeys map[string]string
 	workflows       map[string]domain.Workflow
+	workflowEvents  map[string][]domain.WorkflowEvent
 }
 
 var _ Repository = (*Memory)(nil)
@@ -33,6 +34,7 @@ func NewMemory() *Memory {
 		runEvents:       make(map[string][]domain.RunEvent),
 		idempotencyKeys: make(map[string]string),
 		workflows:       make(map[string]domain.Workflow),
+		workflowEvents:  make(map[string][]domain.WorkflowEvent),
 	}
 }
 
@@ -78,6 +80,87 @@ func (m *Memory) ListWorkflows(_ context.Context) ([]domain.Workflow, error) {
 		return result[i].CreatedAt.Before(result[j].CreatedAt)
 	})
 	return result, nil
+}
+
+func (m *Memory) UpdateWorkflow(_ context.Context, workflow domain.Workflow, expectedVersion int64) (domain.Workflow, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	existing, exists := m.workflows[workflow.ID]
+	if !exists {
+		return domain.Workflow{}, ErrNotFound
+	}
+	if expectedVersion < 1 || existing.Version != expectedVersion {
+		return domain.Workflow{}, ErrConflict
+	}
+	if len(existing.Steps) != len(workflow.Steps) {
+		return domain.Workflow{}, fmt.Errorf("workflow definition cannot change during execution")
+	}
+	updated := cloneWorkflow(existing)
+	updated.Status, updated.Error = workflow.Status, workflow.Error
+	updated.StartedAt, updated.CompletedAt = workflow.StartedAt, workflow.CompletedAt
+	updated.Version++
+	for index := range updated.Steps {
+		if updated.Steps[index].ID != workflow.Steps[index].ID {
+			return domain.Workflow{}, fmt.Errorf("workflow step definition cannot change during execution")
+		}
+		updated.Steps[index].Status = workflow.Steps[index].Status
+		updated.Steps[index].RunID = workflow.Steps[index].RunID
+		updated.Steps[index].Output = workflow.Steps[index].Output
+		updated.Steps[index].Error = workflow.Steps[index].Error
+		updated.Steps[index].StartedAt = workflow.Steps[index].StartedAt
+		updated.Steps[index].CompletedAt = workflow.Steps[index].CompletedAt
+	}
+	m.workflows[workflow.ID] = updated
+	return cloneWorkflow(updated), nil
+}
+
+func (m *Memory) ListRunningWorkflows(ctx context.Context) ([]domain.Workflow, error) {
+	workflows, err := m.ListWorkflows(ctx)
+	if err != nil {
+		return nil, err
+	}
+	result := workflows[:0]
+	for _, workflow := range workflows {
+		if workflow.Status == domain.WorkflowRunning {
+			result = append(result, workflow)
+		}
+	}
+	return result, nil
+}
+
+func (m *Memory) AppendWorkflowEvent(_ context.Context, event domain.WorkflowEvent, retention time.Duration, maxPerWorkflow int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, exists := m.workflows[event.WorkflowID]; !exists {
+		return ErrNotFound
+	}
+	events := append(m.workflowEvents[event.WorkflowID], event)
+	if retention > 0 {
+		cutoff := time.Now().UTC().Add(-retention)
+		first := 0
+		for first < len(events) && events[first].Timestamp.Before(cutoff) {
+			first++
+		}
+		events = events[first:]
+	}
+	if maxPerWorkflow > 0 && len(events) > maxPerWorkflow {
+		events = events[len(events)-maxPerWorkflow:]
+	}
+	m.workflowEvents[event.WorkflowID] = append([]domain.WorkflowEvent(nil), events...)
+	return nil
+}
+
+func (m *Memory) ListWorkflowEvents(_ context.Context, workflowID string, limit int) ([]domain.WorkflowEvent, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if _, exists := m.workflows[workflowID]; !exists {
+		return nil, ErrNotFound
+	}
+	events := m.workflowEvents[workflowID]
+	if limit > 0 && len(events) > limit {
+		events = events[len(events)-limit:]
+	}
+	return append([]domain.WorkflowEvent(nil), events...), nil
 }
 
 func (m *Memory) AppendRunEvent(_ context.Context, event domain.RunEvent, retention time.Duration, maxPerRun int) error {

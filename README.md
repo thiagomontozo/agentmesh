@@ -88,6 +88,7 @@ The Engine resolves the already-selected Agent's runtime through a concurrency-s
 - Load-aware routing by active Runs, declared capacity, and deterministic priority
 - Immutable parent/root Run lineage with direct-child lookup and events
 - Persisted Workflow V1 DAG definitions with explicit input sources
+- Sequential Workflow execution through idempotent Runs
 - Restart recovery for queued/running work
 
 ## API
@@ -111,6 +112,9 @@ The Engine resolves the already-selected Agent's runtime through a concurrency-s
 | `POST` | `/api/v1/workflows` | Create a validated Workflow DAG definition |
 | `GET` | `/api/v1/workflows` | List Workflow definitions |
 | `GET` | `/api/v1/workflows/{id}` | Get a Workflow definition |
+| `POST` | `/api/v1/workflows/{id}/start` | Start a sequential Workflow |
+| `POST` | `/api/v1/workflows/{id}/cancel` | Cancel a pending/running Workflow |
+| `GET` | `/api/v1/workflows/{id}/events` | Stream persisted Workflow lifecycle events |
 
 ## Run locally
 
