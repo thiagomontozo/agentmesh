@@ -39,6 +39,8 @@ flowchart LR
     WN --> RR
     RR --> D[Demo Runtime]
     RR --> H[HTTP Runtime]
+    RR --> L[LLM Runtime]
+    L --> OP[OpenAI-compatible Provider]
     H --> A[Remote Agent]
     D --> S
     W1 --> B[Event Bus]
@@ -57,6 +59,7 @@ The Engine resolves the already-selected Agent's runtime through a concurrency-s
 - Go standard-library HTTP server (`net/http`)
 - Agent registration and lookup
 - Remote HTTP Agent execution through Agent Protocol V1
+- Vendor-neutral LLM provider interface and OpenAI-compatible runtime
 - Policy-controlled HTTP Runtime with dial-time SSRF checks and bounded, uncompressed payloads
 - Per-Agent Bearer/API-key request authentication through non-persisted secret references
 - Request-time environment/mounted-file secret resolution with rotation support
@@ -275,6 +278,7 @@ docs/                   roadmap and architecture notes
 - [Workflow scheduler ownership](docs/workflow-scheduler-ownership.md)
 - [HTTP Runtime security](docs/http-runtime-security.md)
 - [Agent request authentication](docs/agent-authentication.md)
+- [LLM providers](docs/llm-providers.md)
 - [Agent Protocol versioning](docs/protocol-versioning.md)
 - [Architectural reassessment](docs/architectural-reassessment.md)
 - [Configuration and operations](docs/configuration.md)

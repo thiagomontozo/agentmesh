@@ -95,13 +95,13 @@ func (r *Repository) CreateAgent(ctx context.Context, agent domain.Agent) (domai
 	}
 	created, err := scanAgent(r.pool.QueryRow(ctx,
 		`INSERT INTO agents (
-			id, name, system_prompt, runtime, protocol, endpoint, capabilities,
+			id, name, system_prompt, runtime, protocol, endpoint, model, capabilities,
 			effect_idempotency, max_concurrency, priority, created_at, updated_at, version
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-		RETURNING id, name, system_prompt, runtime, protocol, endpoint, capabilities,
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+		RETURNING id, name, system_prompt, runtime, protocol, endpoint, model, capabilities,
 			effect_idempotency, max_concurrency, priority, created_at, updated_at, version`,
 		agent.ID, agent.Name, agent.SystemPrompt, agent.Runtime, agent.Protocol,
-		agent.Endpoint, agent.Capabilities, agent.EffectIdempotency, agent.MaxConcurrency, agent.Priority,
+		agent.Endpoint, agent.Model, agent.Capabilities, agent.EffectIdempotency, agent.MaxConcurrency, agent.Priority,
 		agent.CreatedAt, agent.UpdatedAt, agent.Version,
 	))
 	if err != nil {
@@ -110,7 +110,7 @@ func (r *Repository) CreateAgent(ctx context.Context, agent domain.Agent) (domai
 	return created, nil
 }
 
-const agentSelect = `SELECT id, name, system_prompt, runtime, protocol, endpoint, capabilities,
+const agentSelect = `SELECT id, name, system_prompt, runtime, protocol, endpoint, model, capabilities,
 	effect_idempotency, max_concurrency, priority, created_at, updated_at, version FROM agents`
 
 func (r *Repository) GetAgent(ctx context.Context, id string) (domain.Agent, error) {
@@ -200,14 +200,14 @@ func (r *Repository) UpdateAgent(ctx context.Context, agent domain.Agent, expect
 	updated, err := scanAgent(r.pool.QueryRow(ctx, `
 		UPDATE agents
 		SET name = $2, system_prompt = $3, runtime = $4, protocol = $5,
-			endpoint = $6, capabilities = $7, effect_idempotency = $8,
-			max_concurrency = $9, priority = $10,
+			endpoint = $6, model = $7, capabilities = $8, effect_idempotency = $9,
+			max_concurrency = $10, priority = $11,
 			updated_at = now(), version = version + 1
-		WHERE id = $1 AND version = $11
-		RETURNING id, name, system_prompt, runtime, protocol, endpoint, capabilities,
+		WHERE id = $1 AND version = $12
+		RETURNING id, name, system_prompt, runtime, protocol, endpoint, model, capabilities,
 			effect_idempotency, max_concurrency, priority, created_at, updated_at, version`,
 		agent.ID, agent.Name, agent.SystemPrompt, agent.Runtime, agent.Protocol,
-		agent.Endpoint, agent.Capabilities, agent.EffectIdempotency,
+		agent.Endpoint, agent.Model, agent.Capabilities, agent.EffectIdempotency,
 		agent.MaxConcurrency, agent.Priority, expectedVersion,
 	))
 	if err == nil {
@@ -1042,7 +1042,7 @@ func scanAgent(row rowScanner) (domain.Agent, error) {
 	var agent domain.Agent
 	err := row.Scan(
 		&agent.ID, &agent.Name, &agent.SystemPrompt, &agent.Runtime, &agent.Protocol,
-		&agent.Endpoint, &agent.Capabilities, &agent.EffectIdempotency, &agent.MaxConcurrency, &agent.Priority,
+		&agent.Endpoint, &agent.Model, &agent.Capabilities, &agent.EffectIdempotency, &agent.MaxConcurrency, &agent.Priority,
 		&agent.CreatedAt, &agent.UpdatedAt, &agent.Version,
 	)
 	return agent, err

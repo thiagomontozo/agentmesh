@@ -10,7 +10,7 @@ func TestAgentLegacyDefinitionRemainsValid(t *testing.T) {
 	if err := agent.NormalizeAndValidate(); err != nil {
 		t.Fatal(err)
 	}
-	if agent.Runtime != "" || agent.Protocol != "" || agent.Endpoint != "" || len(agent.Capabilities) != 0 {
+	if agent.Runtime != "" || agent.Protocol != "" || agent.Endpoint != "" || agent.Model != "" || len(agent.Capabilities) != 0 {
 		t.Fatalf("unexpected legacy execution metadata: %+v", agent)
 	}
 }
@@ -30,6 +30,7 @@ func TestAgentNormalizesExecutionMetadata(t *testing.T) {
 	agent := Agent{
 		ID: " agt_remote ", Name: " Legal Agent ", SystemPrompt: " Be precise ",
 		Runtime: " REMOTE ", Protocol: " HTTP ", Endpoint: " http://legal-agent:9000 ",
+		Model:             " legal-model ",
 		Capabilities:      []string{" legal-search ", "summarization"},
 		EffectIdempotency: " REQUIRED ",
 		MaxConcurrency:    4, Priority: 25,
@@ -42,6 +43,9 @@ func TestAgentNormalizesExecutionMetadata(t *testing.T) {
 	}
 	if agent.Runtime != "remote" || agent.Protocol != "http" || agent.Endpoint != "http://legal-agent:9000" {
 		t.Fatalf("unexpected execution metadata: %+v", agent)
+	}
+	if agent.Model != "legal-model" {
+		t.Fatalf("unexpected model: %q", agent.Model)
 	}
 	if len(agent.Capabilities) != 2 || agent.Capabilities[0] != "legal-search" {
 		t.Fatalf("unexpected capabilities: %#v", agent.Capabilities)
@@ -76,6 +80,7 @@ func TestAgentRejectsInvalidExecutionMetadata(t *testing.T) {
 		{name: "protocol without runtime", agent: Agent{ID: "agt_1", Name: "test", Protocol: "http"}},
 		{name: "endpoint without protocol", agent: Agent{ID: "agt_1", Name: "test", Runtime: "remote", Endpoint: "http://agent:9000"}},
 		{name: "relative endpoint", agent: Agent{ID: "agt_1", Name: "test", Runtime: "remote", Protocol: "http", Endpoint: "/v1/runs"}},
+		{name: "model without protocol", agent: Agent{ID: "agt_1", Name: "test", Runtime: "llm", Model: "test-model"}},
 		{name: "invalid effect idempotency", agent: Agent{ID: "agt_1", Name: "test", Runtime: "remote", Protocol: "http", EffectIdempotency: "best-effort"}},
 		{name: "effect idempotency without runtime", agent: Agent{ID: "agt_1", Name: "test", EffectIdempotency: EffectIdempotencyRequired}},
 		{name: "blank capability", agent: Agent{ID: "agt_1", Name: "test", Capabilities: []string{" "}}},

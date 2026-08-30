@@ -124,13 +124,6 @@ func NewSecureHTTPRuntime(client *http.Client, options HTTPOptions) (*HTTPRuntim
 }
 
 func newHTTPRuntime(client *http.Client, options HTTPOptions, requirePolicyTransport bool) (*HTTPRuntime, error) {
-	if client == nil {
-		client = &http.Client{Timeout: DefaultHTTPTimeout}
-	}
-	clientCopy := *client
-	clientCopy.CheckRedirect = func(*http.Request, []*http.Request) error {
-		return http.ErrUseLastResponse
-	}
 	if options.MaxRequestBytes <= 0 {
 		options.MaxRequestBytes = DefaultMaxRequestBytes
 	}
@@ -143,22 +136,46 @@ func newHTTPRuntime(client *http.Client, options HTTPOptions, requirePolicyTrans
 	if options.Authenticator == nil {
 		options.Authenticator = NoAuthentication{}
 	}
+	secureClient, err := policyHTTPClient(client, options.Policy, requirePolicyTransport)
+	if err != nil {
+		return nil, err
+	}
+	return &HTTPRuntime{
+		client: secureClient, maxRequestBytes: options.MaxRequestBytes,
+		maxResponseBytes: options.MaxResponseBytes, policy: options.Policy,
+		authenticator: options.Authenticator,
+	}, nil
+}
+
+// NewSecureHTTPClient returns a cloned client with the same destination policy
+// and redirect behavior used by the remote HTTP Runtime. Other outbound
+// adapters, such as LLM providers, can therefore reuse one SSRF boundary.
+func NewSecureHTTPClient(client *http.Client, policy HTTPPolicy) (*http.Client, error) {
+	if err := normalizeHTTPPolicy(&policy); err != nil {
+		return nil, err
+	}
+	return policyHTTPClient(client, policy, true)
+}
+
+func policyHTTPClient(client *http.Client, policy HTTPPolicy, requirePolicyTransport bool) (*http.Client, error) {
+	if client == nil {
+		client = &http.Client{Timeout: DefaultHTTPTimeout}
+	}
+	clientCopy := *client
+	clientCopy.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
 	transport, ok := clientCopy.Transport.(*http.Transport)
 	if clientCopy.Transport == nil {
 		transport = http.DefaultTransport.(*http.Transport)
 		ok = true
 	}
 	if ok {
-		transport = secureTransport(transport, options.Policy)
-		clientCopy.Transport = transport
+		clientCopy.Transport = secureTransport(transport, policy)
 	} else if requirePolicyTransport {
 		return nil, fmt.Errorf("secure HTTP runtime requires *http.Transport")
 	}
-	return &HTTPRuntime{
-		client: &clientCopy, maxRequestBytes: options.MaxRequestBytes,
-		maxResponseBytes: options.MaxResponseBytes, policy: options.Policy,
-		authenticator: options.Authenticator,
-	}, nil
+	return &clientCopy, nil
 }
 
 func (h *HTTPRuntime) Execute(ctx context.Context, request ExecutionRequest) (ExecutionResult, error) {

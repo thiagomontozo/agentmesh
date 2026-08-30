@@ -51,6 +51,11 @@ curl -X POST http://localhost:8080/api/v1/agents \
 
 `runtime` and `protocol` are extensible lowercase identifiers. For remote HTTP execution, use `runtime: "remote"` and `protocol: "http"`; `endpoint` is an HTTP or HTTPS base URL and AgentMesh calls its `/v1/runs` path using [Agent Protocol V1](agent-protocol-v1.md).
 
+An OpenAI-compatible LLM Agent uses `runtime: "llm"`, `protocol: "openai"`,
+an HTTP(S) endpoint base, and a non-empty `model`. Its Run input is sent as the
+user message and its optional `system_prompt` is sent as a system message. See
+[LLM providers](llm-providers.md).
+
 `effect_idempotency` is optional. The only strict policy is `"required"`: all retries receive one stable Run effect key, and the HTTP Runtime rejects a response that does not echo it. Empty/omitted preserves legacy behavior. The Agent remains responsible for atomically deduplicating its own irreversible effect; see [External effect idempotency](external-effect-idempotency.md).
 
 Capabilities are normalized identifier keys: case is folded to lowercase, spaces/underscores become hyphens, repeated separators collapse, and duplicates are removed while preserving declaration order. For example, `"Legal Analysis"`, `"legal_analysis"`, and `"legal-analysis"` all become `"legal-analysis"`. They remain declared metadata rather than an automatic routing decision.
