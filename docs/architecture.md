@@ -69,7 +69,15 @@ Each runtime attempt runs synchronously under a child context bounded by `AGENTM
 
 `POST /api/v1/runs/{id}/cancel` atomically moves a queued or running Run to `canceled`. The Engine keeps cancel functions only for active executions in its own process, so local runtime contexts—including outbound HTTP requests—are interrupted immediately and retry backoff stops. Queued messages are not removed from the queue; consumers acknowledge them without execution after observing the terminal state.
 
-PostgreSQL and Memory reject stale updates to a canceled Run. This prevents a worker in another replica from overwriting cancellation with a late success or failure. There is not yet a distributed cancellation signal: a remote worker may continue its current external call until it returns or reaches the attempt timeout, but its result is discarded. The resulting lifecycle events are distributed to all API replicas through NATS.
+PostgreSQL and Memory reject stale updates to a canceled Run. This prevents a
+worker in another replica from overwriting cancellation with a late success or
+failure. Every active Engine execution subscribes to its Run's event stream;
+`run.canceled` from another replica immediately cancels the runtime context. A
+250 ms persisted-state poll is the fallback for a missed event or NATS reconnect.
+Context-aware demo and HTTP runtimes therefore stop across replicas, retries do
+not continue, and the lease is released. A runtime that violates the Runtime
+contract by ignoring context can still run until it returns, but its result is
+rejected by persisted cancellation and fencing.
 
 The language boundary is covered by an integration test with two independent HTTP endpoints. Both Agents are registered through the public API and share one HTTP runtime; adding the second Agent introduces only data, not another executor implementation. See [External HTTP Agents](external-agents.md).
 

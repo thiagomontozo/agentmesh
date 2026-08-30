@@ -79,6 +79,7 @@ The Engine resolves the already-selected Agent's runtime through a concurrency-s
 - Configurable per-attempt execution timeout
 - Runtime panic isolation at the execution boundary
 - Explicit cancellation for queued and running Runs
+- Cross-replica cancellation signaling through distributed events with persisted polling fallback
 - Automatic execution-lease renewal for long-running Runs
 - Monotonic fencing tokens for stale-worker write protection
 - Lease-aware multi-replica recovery for abandoned Runs

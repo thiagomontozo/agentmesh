@@ -41,6 +41,8 @@ var ErrAttemptTimeout = errors.New("run attempt timed out")
 var ErrRuntimePanic = errors.New("runtime panic")
 var ErrLeaseRenewal = errors.New("run lease renewal failed")
 
+const cancellationPollInterval = 250 * time.Millisecond
+
 type leaseKeeper struct {
 	cancel context.CancelFunc
 	done   chan struct{}
@@ -296,7 +298,9 @@ func (e *Engine) execute(ctx context.Context, runID string) error {
 	e.activeMu.Lock()
 	e.active[run.ID] = cancelExecution
 	e.activeMu.Unlock()
+	stopCancellationWatch := e.watchCancellation(ctx, run.ID, cancelExecution)
 	defer func() {
+		stopCancellationWatch()
 		cancelExecution()
 		e.activeMu.Lock()
 		delete(e.active, run.ID)
@@ -406,6 +410,42 @@ func (e *Engine) execute(ctx context.Context, runID string) error {
 			return nil
 		case <-retryTimer.C:
 		}
+	}
+}
+
+func (e *Engine) watchCancellation(parent context.Context, runID string, cancelExecution context.CancelFunc) func() {
+	ctx, stop := context.WithCancel(parent)
+	stream, unsubscribe := e.events.Subscribe(runID)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(cancellationPollInterval)
+		defer ticker.Stop()
+		observe := func(source string) bool {
+			cancelExecution()
+			slog.InfoContext(parent, "distributed run cancellation observed", "instance_id", e.instanceID, "run_id", runID, "source", source)
+			return true
+		}
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case event := <-stream:
+				if event.Type == "run.canceled" && observe("event") {
+					return
+				}
+			case <-ticker.C:
+				run, err := e.store.GetRun(ctx, runID)
+				if err == nil && run.Status == domain.RunCanceled && observe("persistence") {
+					return
+				}
+			}
+		}
+	}()
+	return func() {
+		stop()
+		unsubscribe()
+		<-done
 	}
 }
 

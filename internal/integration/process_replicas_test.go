@@ -81,6 +81,12 @@ func TestSeparateProcessesExecutePreserveAndRecoverRuns(t *testing.T) {
 		"AGENTMESH_ROLE": "worker", "AGENTMESH_INSTANCE_ID": "process-worker-owner-" + suffix, "AGENTMESH_EXECUTION_DELAY": "5s",
 	}), "agentmesh worker started")
 	defer owner.stop(false)
+	cancelCandidate := submitReplicaRun(t, apiURL, agent.ID, "process-cancel", "process-cancel-"+suffix)
+	waitProcessRun(t, ctx, apiURL, cancelCandidate.ID, domain.RunRunning)
+	cancelProcessRun(t, apiURL, cancelCandidate.ID)
+	waitProcessRun(t, ctx, apiURL, cancelCandidate.ID, domain.RunCanceled)
+	waitProcessLog(t, ctx, owner, "distributed run cancellation observed")
+
 	abandoned := submitReplicaRun(t, apiURL, agent.ID, "process-recovery", "process-recovery-"+suffix)
 	waitProcessRun(t, ctx, apiURL, abandoned.ID, domain.RunRunning)
 	if !owner.contains(abandoned.ID) {
@@ -264,6 +270,34 @@ func waitProcessRun(t *testing.T, ctx context.Context, baseURL, runID string, st
 		case <-ctx.Done():
 			t.Fatalf("timed out waiting for Run %s to reach %s", runID, status)
 		case <-time.After(25 * time.Millisecond):
+		}
+	}
+}
+
+func cancelProcessRun(t *testing.T, baseURL, runID string) {
+	t.Helper()
+	request, err := http.NewRequest(http.MethodPost, baseURL+"/api/v1/runs/"+runID+"/cancel", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(response.Body)
+		t.Fatalf("cancel process Run: status=%d body=%s", response.StatusCode, body)
+	}
+}
+
+func waitProcessLog(t *testing.T, ctx context.Context, process *agentMeshProcess, value string) {
+	t.Helper()
+	for !process.contains(value) {
+		select {
+		case <-ctx.Done():
+			t.Fatalf("timed out waiting for process log %q\n%s", value, process.outputString())
+		case <-time.After(10 * time.Millisecond):
 		}
 	}
 }
