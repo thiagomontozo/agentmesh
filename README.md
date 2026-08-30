@@ -63,6 +63,7 @@ The Engine resolves the already-selected Agent's runtime through a concurrency-s
 - Optional inbound Bearer authentication with reader/operator/admin/Agent RBAC
 - Bounded PostgreSQL/Memory audit history for mutating API requests
 - Formal Agent Protocol version compatibility and controlled unsupported-version errors
+- Mixed-version API/Worker rolling-upgrade compatibility gate
 - Opt-in stable effect idempotency across remote Agent retries
 - Asynchronous run submission
 - Configurable concurrent worker pool

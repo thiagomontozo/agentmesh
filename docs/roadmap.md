@@ -68,6 +68,7 @@
 - [x] Inbound API authentication
 - [x] RBAC with cryptographic Agent-to-Agent caller identity
 - [x] Bounded audit log
+- [x] Mixed-version rolling-upgrade and schema compatibility CI
 
 ## v0.5 — UI and cloud native
 - [ ] Next.js dashboard

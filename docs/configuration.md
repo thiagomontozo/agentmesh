@@ -32,6 +32,10 @@ docker compose up --build
 
 The API is available at `http://localhost:8080`. PostgreSQL migrations run automatically during application startup.
 
+Rolling releases must preserve the declared compatibility baseline and use
+forward-only additive migrations. The mixed-binary CI procedure and rollback
+boundary are documented in [Rolling-upgrade compatibility](compatibility.md).
+
 ## Environment variables
 
 | Variable | Default | Validation and effect |

@@ -106,8 +106,10 @@ Level 7 claim.
 3. ~~Add bounded operational metrics for queue depth, active Runs, latency,
    attempts, failures, lease loss, recovery, and routing decisions.~~ Resolved
    through the dependency-free Prometheus endpoint and bounded event/HTTP labels.
-4. Validate rolling upgrades and storage/protocol backward compatibility with
-   mixed AgentMesh versions.
+4. ~~Validate rolling upgrades and storage/protocol backward compatibility with
+   mixed AgentMesh versions.~~ Resolved by a dedicated CI job that builds the
+   schema-016 baseline and current binary, then crosses API/Worker roles in both
+   directions on shared PostgreSQL, Redis, and NATS.
 
 ### Desirable
 
