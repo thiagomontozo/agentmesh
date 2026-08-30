@@ -32,6 +32,7 @@ type Config struct {
 	AgentHealthInterval time.Duration
 	AgentHealthTimeout  time.Duration
 	AgentHealthWorkers  int
+	WorkflowConcurrency int
 }
 
 func Load() (Config, error) {
@@ -153,6 +154,13 @@ func Load() (Config, error) {
 	if agentHealthWorkers < 1 {
 		return Config{}, fmt.Errorf("AGENTMESH_AGENT_HEALTH_WORKERS must be >= 1")
 	}
+	workflowConcurrency, err := intEnv("AGENTMESH_WORKFLOW_CONCURRENCY", 4)
+	if err != nil {
+		return Config{}, err
+	}
+	if workflowConcurrency < 1 {
+		return Config{}, fmt.Errorf("AGENTMESH_WORKFLOW_CONCURRENCY must be >= 1")
+	}
 
 	databaseURL := stringEnv("AGENTMESH_DATABASE_URL", "")
 	natsURL := stringEnv("AGENTMESH_NATS_URL", "")
@@ -185,6 +193,7 @@ func Load() (Config, error) {
 		AgentHealthInterval: agentHealthInterval,
 		AgentHealthTimeout:  agentHealthTimeout,
 		AgentHealthWorkers:  agentHealthWorkers,
+		WorkflowConcurrency: workflowConcurrency,
 	}, nil
 }
 

@@ -32,6 +32,7 @@ The API is available at `http://localhost:8080`. PostgreSQL migrations run autom
 | `AGENTMESH_INSTANCE_ID` | generated | Replica identifier included in logs; configure a stable unique value in production |
 | `AGENTMESH_MODE` | `memory` | Must be `memory` or `distributed` |
 | `AGENTMESH_WORKERS` | `4` | Must be at least 1 |
+| `AGENTMESH_WORKFLOW_CONCURRENCY` | `4` | Maximum queued/running Steps per Workflow; must be at least 1 |
 | `AGENTMESH_QUEUE_SIZE` | `128` | Bounded queue size in memory mode; must be at least 1 |
 | `AGENTMESH_EXECUTION_DELAY` | `750ms` | Artificial latency of the demo executor |
 | `AGENTMESH_ATTEMPT_TIMEOUT` | `30s` | Maximum runtime duration for each attempt; must be positive |

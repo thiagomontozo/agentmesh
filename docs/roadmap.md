@@ -51,7 +51,7 @@
 - [x] Immutable parent/root Run lineage and direct-child queries
 - [x] Persisted Workflow V1 DAG model and definition API
 - [x] Sequential Workflow execution through Runs
-- [ ] Workflow fan-out/fan-in execution
+- [x] Workflow fan-out/fan-in execution with bounded concurrency and fail-fast cancellation
 - [ ] Authentication
 - [ ] RBAC
 - [ ] Audit log

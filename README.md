@@ -27,6 +27,9 @@ flowchart LR
     API --> S[(Repository)]
     API --> AR[Capability Router]
     AR --> S
+    API --> WF[Workflow DAG Manager]
+    WF --> S
+    WF --> Q
     API --> Q[Queue]
     Q --> W1[Worker 1]
     Q --> W2[Worker 2]
@@ -88,7 +91,7 @@ The Engine resolves the already-selected Agent's runtime through a concurrency-s
 - Load-aware routing by active Runs, declared capacity, and deterministic priority
 - Immutable parent/root Run lineage with direct-child lookup and events
 - Persisted Workflow V1 DAG definitions with explicit input sources
-- Sequential Workflow execution through idempotent Runs
+- Bounded Workflow DAG execution with sequential, fan-out, and fan-in Steps
 - Restart recovery for queued/running work
 
 ## API
@@ -165,6 +168,7 @@ With the server running in one terminal:
 | `AGENTMESH_INSTANCE_ID` | generated | Stable replica name; set explicitly in production |
 | `AGENTMESH_MODE` | `memory` | `memory` or `distributed` runtime |
 | `AGENTMESH_WORKERS` | `4` | Worker goroutines |
+| `AGENTMESH_WORKFLOW_CONCURRENCY` | `4` | Maximum active Steps per Workflow |
 | `AGENTMESH_QUEUE_SIZE` | `128` | In-memory run queue capacity |
 | `AGENTMESH_EXECUTION_DELAY` | `750ms` | Demo executor latency |
 | `AGENTMESH_ATTEMPT_TIMEOUT` | `30s` | Maximum duration of each execution attempt |

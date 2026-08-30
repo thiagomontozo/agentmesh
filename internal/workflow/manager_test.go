@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -95,19 +96,147 @@ func TestSequentialWorkflowCancellationStopsRun(t *testing.T) {
 	waitForWorkflow(t, repository, workflow.ID, domain.WorkflowCanceled)
 }
 
-func TestSequentialStartRejectsFanOut(t *testing.T) {
-	repository, _, manager, stop := newWorkflowHarness(t, executorFunc(func(_ context.Context, _ domain.Agent, input string) (string, error) { return input, nil }))
-	defer stop()
-	workflow, err := repository.CreateWorkflow(context.Background(), domain.Workflow{ID: "wf_fanout", Steps: []domain.WorkflowStep{
-		{ID: "a", AgentID: "agt_a", Input: "x"},
-		{ID: "b", AgentID: "agt_b", Input: "x", DependsOn: []string{"a"}},
-		{ID: "c", AgentID: "agt_c", Input: "x", DependsOn: []string{"a"}},
+func TestWorkflowFanOutFanInRunsInParallelAndAggregates(t *testing.T) {
+	repository := store.NewMemory()
+	for _, id := range []string{"agt_a", "agt_b", "agt_c", "agt_e", "agt_d"} {
+		if _, err := repository.CreateAgent(context.Background(), domain.Agent{ID: id, Name: id}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	started := make(chan string, 3)
+	release := make(chan struct{})
+	var current, maximum atomic.Int32
+	var inputsMu sync.Mutex
+	inputs := make(map[string]string)
+	executor := executorFunc(func(ctx context.Context, agent domain.Agent, input string) (string, error) {
+		inputsMu.Lock()
+		inputs[agent.ID] = input
+		inputsMu.Unlock()
+		if agent.ID == "agt_b" || agent.ID == "agt_c" || agent.ID == "agt_e" {
+			active := current.Add(1)
+			defer current.Add(-1)
+			for {
+				observed := maximum.Load()
+				if active <= observed || maximum.CompareAndSwap(observed, active) {
+					break
+				}
+			}
+			started <- agent.ID
+			select {
+			case <-ctx.Done():
+				return "", ctx.Err()
+			case <-release:
+			}
+		}
+		return agent.ID + "(" + input + ")", nil
+	})
+	runEngine := engine.New(repository, events.NewBus(), executor, queue.NewMemory(16), coordination.NewMemory(), 4, engine.RetryPolicy{
+		MaxAttempts: 1, InitialBackoff: time.Millisecond, MaxBackoff: time.Millisecond, LeaseTTL: time.Minute, AttemptTimeout: time.Second,
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	runEngine.Start(ctx)
+	manager := NewWithConcurrency(repository, runEngine, 2)
+	manager.Run(ctx)
+	defer func() { cancel(); manager.Stop(); runEngine.Stop() }()
+	w, err := repository.CreateWorkflow(context.Background(), domain.Workflow{ID: "wf_fanout", Input: "document", Steps: []domain.WorkflowStep{
+		{ID: "a", AgentID: "agt_a", InputFrom: []string{"workflow"}},
+		{ID: "b", AgentID: "agt_b", DependsOn: []string{"a"}, InputFrom: []string{"a"}},
+		{ID: "c", AgentID: "agt_c", DependsOn: []string{"a"}, InputFrom: []string{"a"}},
+		{ID: "e", AgentID: "agt_e", DependsOn: []string{"a"}, InputFrom: []string{"a"}},
+		{ID: "d", AgentID: "agt_d", DependsOn: []string{"b", "c", "e"}, InputFrom: []string{"b", "c", "e"}, InputAggregation: "json-array"},
 	}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := manager.StartWorkflow(context.Background(), workflow.ID); !errors.Is(err, ErrNotSequential) {
-		t.Fatalf("expected fan-out rejection, got %v", err)
+	if _, err := manager.StartWorkflow(context.Background(), w.ID); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		select {
+		case <-started:
+		case <-time.After(2 * time.Second):
+			t.Fatal("fan-out branches did not overlap")
+		}
+	}
+	select {
+	case third := <-started:
+		t.Fatalf("concurrency limit admitted third branch %s before a slot was free", third)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(release)
+	completed := waitForWorkflow(t, repository, w.ID, domain.WorkflowSucceeded)
+	if maximum.Load() != 2 {
+		t.Fatalf("expected two concurrent branches, got %d", maximum.Load())
+	}
+	inputsMu.Lock()
+	gotInput := inputs["agt_d"]
+	inputsMu.Unlock()
+	wantInput := `["agt_b(agt_a(document))","agt_c(agt_a(document))","agt_e(agt_a(document))"]`
+	if gotInput != wantInput {
+		t.Fatalf("unexpected fan-in aggregation: got=%s want=%s", gotInput, wantInput)
+	}
+	branchB, _ := repository.GetRun(context.Background(), completed.Steps[1].RunID)
+	branchC, _ := repository.GetRun(context.Background(), completed.Steps[2].RunID)
+	branchE, _ := repository.GetRun(context.Background(), completed.Steps[3].RunID)
+	root := completed.Steps[0].RunID
+	if branchB.ParentRunID != root || branchC.ParentRunID != root || branchE.ParentRunID != root {
+		t.Fatalf("fan-out branches lost Run lineage: B=%+v C=%+v E=%+v", branchB, branchC, branchE)
+	}
+}
+
+func TestWorkflowFanOutFailureCancelsSiblingAndFanIn(t *testing.T) {
+	repository := store.NewMemory()
+	for _, id := range []string{"agt_a", "agt_b", "agt_c", "agt_d"} {
+		_, _ = repository.CreateAgent(context.Background(), domain.Agent{ID: id, Name: id})
+	}
+	branchCStarted := make(chan struct{})
+	branchCCanceled := make(chan struct{})
+	executor := executorFunc(func(ctx context.Context, agent domain.Agent, input string) (string, error) {
+		switch agent.ID {
+		case "agt_b":
+			select {
+			case <-branchCStarted:
+			case <-ctx.Done():
+				return "", ctx.Err()
+			}
+			return "", errors.New("branch failed")
+		case "agt_c":
+			close(branchCStarted)
+			<-ctx.Done()
+			close(branchCCanceled)
+			return "", ctx.Err()
+		default:
+			return input, nil
+		}
+	})
+	runEngine := engine.New(repository, events.NewBus(), executor, queue.NewMemory(16), coordination.NewMemory(), 4, engine.RetryPolicy{
+		MaxAttempts: 1, InitialBackoff: time.Millisecond, MaxBackoff: time.Millisecond, LeaseTTL: time.Minute, AttemptTimeout: time.Second,
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	runEngine.Start(ctx)
+	manager := NewWithConcurrency(repository, runEngine, 2)
+	manager.Run(ctx)
+	defer func() { cancel(); manager.Stop(); runEngine.Stop() }()
+	w, err := repository.CreateWorkflow(context.Background(), domain.Workflow{ID: "wf_partial_failure", Steps: []domain.WorkflowStep{
+		{ID: "a", AgentID: "agt_a", Input: "x"},
+		{ID: "b", AgentID: "agt_b", DependsOn: []string{"a"}, InputFrom: []string{"a"}},
+		{ID: "c", AgentID: "agt_c", DependsOn: []string{"a"}, InputFrom: []string{"a"}},
+		{ID: "d", AgentID: "agt_d", DependsOn: []string{"b", "c"}, InputFrom: []string{"b", "c"}, InputAggregation: "json-array"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.StartWorkflow(context.Background(), w.ID); err != nil {
+		t.Fatal(err)
+	}
+	completed := waitForWorkflow(t, repository, w.ID, domain.WorkflowFailed)
+	if completed.Steps[1].Status != domain.WorkflowStepFailed || completed.Steps[2].Status != domain.WorkflowStepCanceled || completed.Steps[3].Status != domain.WorkflowStepCanceled {
+		t.Fatalf("unexpected fail-fast states: %+v", completed)
+	}
+	select {
+	case <-branchCCanceled:
+	case <-time.After(time.Second):
+		t.Fatal("failed fan-out did not cancel active sibling context")
 	}
 }
 
@@ -248,13 +377,13 @@ func waitForStepStatus(t *testing.T, repository store.Repository, id string, sta
 	t.Fatalf("no Step reached %s", status)
 }
 
-func TestResolveSequentialInput(t *testing.T) {
+func TestResolveInput(t *testing.T) {
 	w := domain.Workflow{Input: "root", Steps: []domain.WorkflowStep{{ID: "a", RunID: "run_a", Output: "out", Status: domain.WorkflowStepSucceeded}}}
-	input, parent, err := resolveSequentialInput(w, domain.WorkflowStep{ID: "b", DependsOn: []string{"a"}, InputFrom: []string{"a"}})
+	input, parent, err := resolveInput(w, domain.WorkflowStep{ID: "b", DependsOn: []string{"a"}, InputFrom: []string{"a"}})
 	if err != nil || input != "out" || parent != "run_a" {
 		t.Fatalf("unexpected resolution: input=%q parent=%q err=%v", input, parent, err)
 	}
-	if _, _, err := resolveSequentialInput(w, domain.WorkflowStep{ID: "b", InputFrom: []string{"missing"}}); err == nil || !strings.Contains(err.Error(), "source") {
+	if _, _, err := resolveInput(w, domain.WorkflowStep{ID: "b", InputFrom: []string{"missing"}}); err == nil || !strings.Contains(err.Error(), "source") {
 		t.Fatalf("expected missing source error, got %v", err)
 	}
 }
