@@ -123,43 +123,60 @@ func main() {
 		AttemptTimeout: cfg.AttemptTimeout,
 	})
 	runEngine.SetInstanceID(instanceID)
-	if err := runEngine.Recover(rootCtx); err != nil {
-		logger.Error("run recovery failed", "error", err)
-		os.Exit(1)
+	runsWork := cfg.Role == "all" || cfg.Role == "worker"
+	servesAPI := cfg.Role == "all" || cfg.Role == "api"
+	if runsWork {
+		if err := runEngine.Recover(rootCtx); err != nil {
+			logger.Error("run recovery failed", "error", err)
+			os.Exit(1)
+		}
+		runEngine.Start(rootCtx)
 	}
-	runEngine.Start(rootCtx)
 	workflowManager := workflowengine.NewWithConcurrency(repository, runEngine, cfg.WorkflowConcurrency)
-	workflowManager.Run(rootCtx)
-	if err := workflowManager.Recover(rootCtx); err != nil {
-		logger.Error("workflow recovery failed", "error", err)
-		os.Exit(1)
+	if servesAPI {
+		workflowManager.Run(rootCtx)
+		if err := workflowManager.Recover(rootCtx); err != nil {
+			logger.Error("workflow recovery failed", "error", err)
+			os.Exit(1)
+		}
 	}
-	healthService, err := agenthealth.New(repository, nil, agenthealth.Config{
-		Path: cfg.AgentHealthPath, Interval: cfg.AgentHealthInterval,
-		Timeout: cfg.AgentHealthTimeout, Workers: cfg.AgentHealthWorkers,
-	})
-	if err != nil {
-		logger.Error("agent health initialization failed", "error", err)
-		os.Exit(1)
-	}
-	healthService.Start(rootCtx)
-	defer healthService.Stop()
+	var healthService *agenthealth.Service
+	var server *http.Server
+	var serverErrors <-chan error
+	if servesAPI {
+		healthService, err = agenthealth.New(repository, nil, agenthealth.Config{
+			Path: cfg.AgentHealthPath, Interval: cfg.AgentHealthInterval,
+			Timeout: cfg.AgentHealthTimeout, Workers: cfg.AgentHealthWorkers,
+		})
+		if err != nil {
+			logger.Error("agent health initialization failed", "error", err)
+			os.Exit(1)
+		}
+		healthService.Start(rootCtx)
 
-	api := httpapi.NewWithInstanceID(repository, runEngine, eventBus, instanceID)
-	api.SetAgentHealth(healthService)
-	api.SetWorkflowController(workflowManager)
-	api.SetAgentCallLimits(cfg.AgentCallMaxDepth, cfg.AgentCallMaxChildren)
-	server := &http.Server{
-		Addr:              cfg.Addr,
-		Handler:           api.Handler(),
-		ReadHeaderTimeout: 5 * time.Second,
-	}
+		api := httpapi.NewWithInstanceID(repository, runEngine, eventBus, instanceID)
+		api.SetAgentHealth(healthService)
+		api.SetWorkflowController(workflowManager)
+		api.SetAgentCallLimits(cfg.AgentCallMaxDepth, cfg.AgentCallMaxChildren)
+		server = &http.Server{
+			Addr:              cfg.Addr,
+			Handler:           api.Handler(),
+			ReadHeaderTimeout: 5 * time.Second,
+		}
 
-	serverErrors := make(chan error, 1)
-	go func() {
-		logger.Info("agentmesh started", "addr", cfg.Addr, "workers", cfg.Workers)
-		serverErrors <- server.ListenAndServe()
-	}()
+		errorsChannel := make(chan error, 1)
+		serverErrors = errorsChannel
+		go func() {
+			logger.Info("agentmesh API started", "addr", cfg.Addr, "role", cfg.Role, "workers", cfg.Workers)
+			errorsChannel <- server.ListenAndServe()
+		}()
+	} else {
+		logger.Info("agentmesh worker started", "role", cfg.Role, "workers", cfg.Workers)
+	}
+	var engineErrors <-chan error
+	if runsWork {
+		engineErrors = runEngine.Errors()
+	}
 
 	select {
 	case <-rootCtx.Done():
@@ -169,19 +186,24 @@ func main() {
 			logger.Error("http server failed", "error", err)
 		}
 		stop()
-	case err := <-runEngine.Errors():
+	case err := <-engineErrors:
 		logger.Error("run engine failed", "error", err)
 		stop()
 	}
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
-	defer cancel()
-	if err := server.Shutdown(shutdownCtx); err != nil {
-		logger.Error("http shutdown failed", "error", err)
+	if server != nil {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			logger.Error("http shutdown failed", "error", err)
+		}
+		cancel()
+	}
+	if healthService != nil {
+		healthService.Stop()
 	}
 	workflowManager.Stop()
 	runEngine.Stop()
-	logger.Info("agentmesh stopped")
+	logger.Info("agentmesh stopped", "role", cfg.Role)
 }
 
 func resolveInstanceID(configured string) string {

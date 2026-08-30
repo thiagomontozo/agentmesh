@@ -12,7 +12,7 @@ API/Engine/Repository/Redis/Queue/Event Bus A
 API/Engine/Repository/Redis/Queue/Event Bus B
 ```
 
-Each replica owns separate PostgreSQL pools, Redis clients, NATS JetStream queue
+Each logical replica owns separate PostgreSQL pools, Redis clients, NATS JetStream queue
 clients, persistent NATS event buses, HTTP servers, Engine lifecycles, instance
 IDs, and executors. They share only the external distributed services and the Go
 test process. This catches replica-bound state and coordination errors while
@@ -65,3 +65,8 @@ Agent Protocol idempotency is still required for irreversible side effects in a
 remote Agent. Failure modes such as host loss, network partitions, DNS failure,
 slow storage, rolling upgrades, and sustained load require separate container or
 deployment-level tests.
+
+The additional process-level test builds the production binary and exercises
+independent `api` and `worker` OS processes, including API restart, hard worker
+failure, lease expiry, and replacement-worker recovery. See
+[Process roles](process-roles.md).

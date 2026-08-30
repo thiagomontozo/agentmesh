@@ -12,7 +12,7 @@ func TestLoadDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Addr != ":8080" || cfg.Mode != "memory" || cfg.Workers != 4 || cfg.QueueSize != 128 {
+	if cfg.Addr != ":8080" || cfg.Mode != "memory" || cfg.Role != "all" || cfg.Workers != 4 || cfg.QueueSize != 128 {
 		t.Fatalf("unexpected defaults: %+v", cfg)
 	}
 	if cfg.ExecutionDelay != 750*time.Millisecond || cfg.AttemptTimeout != 30*time.Second || cfg.ShutdownTimeout != 10*time.Second {
@@ -42,6 +42,7 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 		value string
 	}{
 		{name: "mode is unknown", key: "AGENTMESH_MODE", value: "cloud"},
+		{name: "role is unknown", key: "AGENTMESH_ROLE", value: "scheduler"},
 		{name: "workers is not an integer", key: "AGENTMESH_WORKERS", value: "many"},
 		{name: "workers is zero", key: "AGENTMESH_WORKERS", value: "0"},
 		{name: "queue is zero", key: "AGENTMESH_QUEUE_SIZE", value: "0"},
@@ -82,6 +83,14 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 	}
 }
 
+func TestSplitRoleRequiresDistributedMode(t *testing.T) {
+	clearEnvironment(t)
+	t.Setenv("AGENTMESH_ROLE", "api")
+	if _, err := Load(); err == nil {
+		t.Fatal("expected API role in memory mode to fail")
+	}
+}
+
 func TestLoadConfiguresAttemptTimeout(t *testing.T) {
 	clearEnvironment(t)
 	t.Setenv("AGENTMESH_ATTEMPT_TIMEOUT", "45s")
@@ -119,6 +128,7 @@ func clearEnvironment(t *testing.T) {
 	for _, key := range []string{
 		"AGENTMESH_ADDR",
 		"AGENTMESH_MODE",
+		"AGENTMESH_ROLE",
 		"AGENTMESH_WORKERS",
 		"AGENTMESH_QUEUE_SIZE",
 		"AGENTMESH_EXECUTION_DELAY",
