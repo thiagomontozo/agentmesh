@@ -47,6 +47,12 @@ decompression are disabled, TLS is at least 1.2, and both protocol directions ar
 bounded. Private networks remain enabled by default for internal Agents. See
 [HTTP Runtime security](http-runtime-security.md).
 
+Outbound authentication is another runtime boundary. A
+`runtime.RequestAuthenticator` applies an Agent-specific Bearer token or API-key
+header after protocol encoding. Configuration contains only environment-variable
+references; credential values do not enter Agent persistence, the public API,
+events, or protocol bodies. See [Agent request authentication](agent-authentication.md).
+
 Transport failures are classified as temporary, permanent, timeout, canceled, or protocol errors. HTTP `408`, `429`, and `5xx` are temporary; other non-`200` statuses are permanent. A V1 failed response uses its `error.retryable` flag for classification. The Engine retains ownership of retry policy and, at this stage, continues its existing attempt policy for every non-context execution error.
 
 Each runtime attempt runs synchronously under a child context bounded by `AGENTMESH_ATTEMPT_TIMEOUT`. Attempt timeout is distinct from cancellation of the Engine's parent context: timeout consumes an attempt and may retry, while shutdown cancellation exits execution and leaves the running Run recoverable. No watchdog goroutine is created, so runtimes that honor context cannot leak execution goroutines or indefinitely block graceful worker shutdown.

@@ -50,6 +50,7 @@ type HTTPOptions struct {
 	MaxRequestBytes  int64
 	MaxResponseBytes int64
 	Policy           HTTPPolicy
+	Authenticator    RequestAuthenticator
 }
 
 type HTTPErrorKind string
@@ -104,6 +105,7 @@ type HTTPRuntime struct {
 	maxRequestBytes  int64
 	maxResponseBytes int64
 	policy           HTTPPolicy
+	authenticator    RequestAuthenticator
 }
 
 // NewHTTPRuntime clones the supplied client and always disables redirects. A
@@ -136,6 +138,9 @@ func newHTTPRuntime(client *http.Client, options HTTPOptions, requirePolicyTrans
 	if err := normalizeHTTPPolicy(&options.Policy); err != nil {
 		return nil, err
 	}
+	if options.Authenticator == nil {
+		options.Authenticator = NoAuthentication{}
+	}
 	transport, ok := clientCopy.Transport.(*http.Transport)
 	if clientCopy.Transport == nil {
 		transport = http.DefaultTransport.(*http.Transport)
@@ -150,6 +155,7 @@ func newHTTPRuntime(client *http.Client, options HTTPOptions, requirePolicyTrans
 	return &HTTPRuntime{
 		client: &clientCopy, maxRequestBytes: options.MaxRequestBytes,
 		maxResponseBytes: options.MaxResponseBytes, policy: options.Policy,
+		authenticator: options.Authenticator,
 	}, nil
 }
 
@@ -189,6 +195,9 @@ func (h *HTTPRuntime) Execute(ctx context.Context, request ExecutionRequest) (Ex
 	httpRequest.Header.Set("Accept", "application/json")
 	httpRequest.Header.Set("Accept-Encoding", "identity")
 	httpRequest.Header.Set("Idempotency-Key", wireRequest.IdempotencyKey)
+	if err := h.authenticator.Authenticate(ctx, request.Agent, httpRequest); err != nil {
+		return ExecutionResult{}, &HTTPError{Kind: HTTPErrorPermanent, Err: ErrAuthentication}
+	}
 
 	response, err := h.client.Do(httpRequest)
 	if err != nil {

@@ -2,6 +2,11 @@
 
 Agent Protocol V1 is the language-neutral HTTP/JSON contract between AgentMesh and a remote Agent. Agents registered with `runtime: "remote"`, `protocol: "http"`, and a base `endpoint` are invoked through the HTTP runtime.
 
+Transport authentication is orthogonal to the JSON contract. AgentMesh can add
+an Agent-specific Bearer or API-key header without changing the request body; see
+[Agent request authentication](agent-authentication.md). Agents must never echo
+credentials in protocol errors or outputs.
+
 ## Transport
 
 - Method: `POST`

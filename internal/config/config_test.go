@@ -151,6 +151,7 @@ func clearEnvironment(t *testing.T) {
 		"AGENTMESH_HTTP_BLOCKED_CIDRS",
 		"AGENTMESH_HTTP_MAX_REQUEST_BYTES",
 		"AGENTMESH_HTTP_MAX_RESPONSE_BYTES",
+		"AGENTMESH_AGENT_AUTH_CONFIG",
 	} {
 		t.Setenv(key, "")
 	}
