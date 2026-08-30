@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/thiagomontozo/agentmesh/internal/agenthealth"
+	"github.com/thiagomontozo/agentmesh/internal/apiauth"
 	"github.com/thiagomontozo/agentmesh/internal/discovery"
 	"github.com/thiagomontozo/agentmesh/internal/domain"
 	"github.com/thiagomontozo/agentmesh/internal/engine"
@@ -37,6 +38,9 @@ type Server struct {
 	workflows            workflowController
 	agentCallMaxDepth    int
 	agentCallMaxChildren int
+	authenticator        *apiauth.Authenticator
+	auditRetention       time.Duration
+	auditMaxEvents       int
 }
 
 type workflowController interface {
@@ -53,6 +57,7 @@ func NewWithInstanceID(s store.Repository, e *engine.Engine, bus events.Broker, 
 		store: s, engine: e, events: bus, mux: http.NewServeMux(), instanceID: instanceID,
 		agentHealth:       agenthealth.Noop{},
 		agentCallMaxDepth: 8, agentCallMaxChildren: 16,
+		auditRetention: 90 * 24 * time.Hour, auditMaxEvents: 100000,
 	}
 	server.discovery = discovery.New(s, server.agentHealth)
 	server.agentRouter = agentrouter.NewWithLoad(server.discovery, s)
@@ -81,8 +86,23 @@ func (s *Server) SetAgentCallLimits(maxDepth, maxChildren int) {
 	}
 }
 
+func (s *Server) SetAPISecurity(authenticator *apiauth.Authenticator, auditRetention time.Duration, auditMaxEvents int) {
+	s.authenticator = authenticator
+	if auditRetention > 0 {
+		s.auditRetention = auditRetention
+	}
+	if auditMaxEvents > 0 {
+		s.auditMaxEvents = auditMaxEvents
+	}
+}
+
 func (s *Server) Handler() http.Handler {
-	return requestContextMiddleware(s.instanceID, loggingMiddleware(recoverMiddleware(s.mux)))
+	handler := http.Handler(recoverMiddleware(s.mux))
+	handler = s.auditMiddleware(handler)
+	if s.authenticator != nil {
+		handler = s.authenticator.Middleware(handler)
+	}
+	return requestContextMiddleware(s.instanceID, loggingMiddleware(handler))
 }
 
 func (s *Server) routes() {
@@ -107,6 +127,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/workflows/{id}/start", s.startWorkflow)
 	s.mux.HandleFunc("POST /api/v1/workflows/{id}/cancel", s.cancelWorkflow)
 	s.mux.HandleFunc("GET /api/v1/workflows/{id}/events", s.workflowEvents)
+	s.mux.HandleFunc("GET /api/v1/audit-events", s.listAuditEvents)
 }
 
 type createWorkflowRequest struct {
@@ -558,6 +579,14 @@ func (s *Server) createAgentChildRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	callerAgentID := strings.TrimSpace(r.Header.Get("X-AgentMesh-Caller-Agent-ID"))
+	if s.authenticator != nil && s.authenticator.Enabled() {
+		identity, authenticated := apiauth.FromContext(r.Context())
+		if !authenticated || !identity.HasAny(apiauth.RoleAgent) {
+			writeError(w, http.StatusForbidden, "authenticated Agent identity is required")
+			return
+		}
+		callerAgentID = identity.AgentID
+	}
 	if callerAgentID == "" || callerAgentID != parent.AgentID {
 		writeError(w, http.StatusForbidden, "caller Agent does not own the parent Run")
 		return
@@ -693,6 +722,23 @@ func (s *Server) createAgentChildRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusAccepted, created)
+}
+
+func (s *Server) listAuditEvents(w http.ResponseWriter, r *http.Request) {
+	limit, err := queryNonNegativeInt(r.URL.Query().Get("limit"), "limit")
+	if err != nil || limit > 1000 {
+		writeError(w, http.StatusBadRequest, "limit must be between 0 and 1000")
+		return
+	}
+	if limit == 0 {
+		limit = 100
+	}
+	events, err := s.store.ListAuditEvents(r.Context(), limit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not list audit events")
+		return
+	}
+	writeJSON(w, http.StatusOK, events)
 }
 
 func (s *Server) agentCallAncestry(ctx context.Context, parent domain.Run) (int, map[string]struct{}, error) {
@@ -1035,6 +1081,37 @@ func loggingMiddleware(next http.Handler) http.Handler {
 			"duration_ms", time.Since(started).Milliseconds(),
 		)
 		slog.InfoContext(r.Context(), "http request", attributes...)
+	})
+}
+
+func (s *Server) auditMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		recorder := &responseRecorder{ResponseWriter: w}
+		next.ServeHTTP(recorder, r)
+		if r.Method == http.MethodGet || r.Method == http.MethodHead || r.URL.Path == "/healthz" || r.URL.Path == "/readyz" {
+			return
+		}
+		status := recorder.status
+		if status == 0 {
+			status = http.StatusOK
+		}
+		identity, authenticated := apiauth.FromContext(r.Context())
+		subject := "anonymous"
+		roles := make([]string, 0, len(identity.Roles))
+		if authenticated {
+			subject = identity.Subject
+			for _, role := range identity.Roles {
+				roles = append(roles, string(role))
+			}
+		}
+		event := domain.AuditEvent{
+			ID: newID("aud"), Timestamp: time.Now().UTC(), RequestID: observability.RequestID(r.Context()),
+			InstanceID: observability.InstanceID(r.Context()), Subject: subject, Roles: roles,
+			AgentID: identity.AgentID, Method: r.Method, Path: r.URL.Path, Status: status,
+		}
+		if err := s.store.AppendAuditEvent(r.Context(), event, s.auditRetention, s.auditMaxEvents); err != nil {
+			slog.ErrorContext(r.Context(), "audit event persistence failed", "event_id", event.ID, "error", err)
+		}
 	})
 }
 

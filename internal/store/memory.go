@@ -22,6 +22,43 @@ type Memory struct {
 	idempotencyKeys map[string]string
 	workflows       map[string]domain.Workflow
 	workflowEvents  map[string][]domain.WorkflowEvent
+	auditEvents     []domain.AuditEvent
+}
+
+func (m *Memory) AppendAuditEvent(_ context.Context, event domain.AuditEvent, retention time.Duration, maxEvents int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.auditEvents = append(m.auditEvents, event)
+	cutoff := time.Time{}
+	if retention > 0 {
+		cutoff = time.Now().UTC().Add(-retention)
+	}
+	first := 0
+	for first < len(m.auditEvents) && !cutoff.IsZero() && m.auditEvents[first].Timestamp.Before(cutoff) {
+		first++
+	}
+	if maxEvents > 0 && len(m.auditEvents)-first > maxEvents {
+		first = len(m.auditEvents) - maxEvents
+	}
+	if first > 0 {
+		m.auditEvents = append([]domain.AuditEvent(nil), m.auditEvents[first:]...)
+	}
+	return nil
+}
+
+func (m *Memory) ListAuditEvents(_ context.Context, limit int) ([]domain.AuditEvent, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if limit <= 0 || limit > len(m.auditEvents) {
+		limit = len(m.auditEvents)
+	}
+	start := len(m.auditEvents) - limit
+	result := make([]domain.AuditEvent, limit)
+	copy(result, m.auditEvents[start:])
+	for i := range result {
+		result[i].Roles = append([]string(nil), result[i].Roles...)
+	}
+	return result, nil
 }
 
 var _ Repository = (*Memory)(nil)

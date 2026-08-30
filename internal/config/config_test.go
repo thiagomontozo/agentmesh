@@ -33,6 +33,9 @@ func TestLoadDefaults(t *testing.T) {
 		cfg.HTTPMaxRequestBytes != 1<<20 || cfg.HTTPMaxResponseBytes != 1<<20 {
 		t.Fatalf("unexpected HTTP security defaults: %+v", cfg)
 	}
+	if cfg.AuditRetention != 90*24*time.Hour || cfg.AuditMaxEvents != 100000 {
+		t.Fatalf("unexpected audit defaults: %+v", cfg)
+	}
 }
 
 func TestLoadRejectsInvalidValues(t *testing.T) {
@@ -71,6 +74,8 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 		{name: "HTTP request limit is zero", key: "AGENTMESH_HTTP_MAX_REQUEST_BYTES", value: "0"},
 		{name: "HTTP response limit is invalid", key: "AGENTMESH_HTTP_MAX_RESPONSE_BYTES", value: "large"},
 		{name: "HTTP blocked CIDR is invalid", key: "AGENTMESH_HTTP_BLOCKED_CIDRS", value: "private"},
+		{name: "audit retention is zero", key: "AGENTMESH_AUDIT_RETENTION", value: "0s"},
+		{name: "audit max is zero", key: "AGENTMESH_AUDIT_MAX_EVENTS", value: "0"},
 	}
 
 	for _, test := range tests {
@@ -164,6 +169,9 @@ func clearEnvironment(t *testing.T) {
 		"AGENTMESH_HTTP_MAX_REQUEST_BYTES",
 		"AGENTMESH_HTTP_MAX_RESPONSE_BYTES",
 		"AGENTMESH_AGENT_AUTH_CONFIG",
+		"AGENTMESH_API_AUTH_CONFIG",
+		"AGENTMESH_AUDIT_RETENTION",
+		"AGENTMESH_AUDIT_MAX_EVENTS",
 	} {
 		t.Setenv(key, "")
 	}

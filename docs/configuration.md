@@ -79,6 +79,12 @@ whose `secret_env` points to a separate environment variable. No secret is store
 in AgentMesh persistence or returned through its API. See
 [Agent request authentication](agent-authentication.md).
 
+`AGENTMESH_API_AUTH_CONFIG` enables inbound Bearer authentication and RBAC using
+environment-variable token references. Empty preserves the legacy unauthenticated
+API. `AGENTMESH_AUDIT_RETENTION` and `AGENTMESH_AUDIT_MAX_EVENTS` bound the
+persisted mutating-request history. See [API authentication](api-authentication.md)
+and [Audit log](audit-log.md).
+
 Example without Compose:
 
 ```bash

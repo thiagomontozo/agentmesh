@@ -64,9 +64,9 @@
 - [x] Independent API/Worker process roles and crash/restart acceptance test
 - [x] Cross-replica Run cancellation with event signaling and persistence fallback
 - [x] Renewable per-Workflow scheduler ownership and replica takeover
-- [ ] Inbound API authentication
-- [ ] RBAC
-- [ ] Audit log
+- [x] Inbound API authentication
+- [x] RBAC with cryptographic Agent-to-Agent caller identity
+- [x] Bounded audit log
 
 ## v0.5 — UI and cloud native
 - [ ] Next.js dashboard

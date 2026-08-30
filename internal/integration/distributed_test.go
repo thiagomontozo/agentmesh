@@ -47,7 +47,24 @@ func TestDistributedRunLifecycleAndIdempotency(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
 	repository := store.NewCached(postgresRepository, redisCache, time.Minute)
+	auditEvent := domain.AuditEvent{
+		ID: "aud_" + suffix, Timestamp: time.Now().UTC(), Subject: "integration-admin",
+		Roles: []string{"admin"}, Method: http.MethodPost, Path: "/api/v1/agents", Status: http.StatusCreated,
+	}
+	if err := repository.AppendAuditEvent(ctx, auditEvent, time.Hour, 100); err != nil {
+		t.Fatal(err)
+	}
+	auditEvents, err := repository.ListAuditEvents(ctx, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(auditEvents, func(event domain.AuditEvent) bool {
+		return event.ID == auditEvent.ID && event.Subject == auditEvent.Subject
+	}) {
+		t.Fatalf("PostgreSQL audit event was not persisted: %+v", auditEvents)
+	}
 	executor := executorFunc(func(_ context.Context, agent domain.Agent, input string) (string, error) {
 		return agent.Name + ":" + input, nil
 	})
@@ -61,7 +78,6 @@ func TestDistributedRunLifecycleAndIdempotency(t *testing.T) {
 		runEngine.Stop()
 	}()
 
-	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
 	agent := domain.Agent{ID: "agt_" + suffix, Name: "integration", CreatedAt: time.Now().UTC()}
 	if _, err := repository.CreateAgent(ctx, agent); err != nil {
 		t.Fatal(err)
