@@ -260,6 +260,7 @@ docs/                   roadmap and architecture notes
 - [HTTP Runtime security](docs/http-runtime-security.md)
 - [Agent request authentication](docs/agent-authentication.md)
 - [Agent Protocol versioning](docs/protocol-versioning.md)
+- [Architectural reassessment](docs/architectural-reassessment.md)
 - [Configuration and operations](docs/configuration.md)
 - [API usage and examples](docs/api.md)
 - [Troubleshooting](docs/troubleshooting.md)

@@ -59,6 +59,7 @@
 - [x] Policy-controlled HTTP Runtime security and SSRF hardening
 - [x] Outbound Agent Bearer/API-key authentication abstraction
 - [x] Formal Agent Protocol version compatibility and unsupported-version errors
+- [x] Evidence-based architectural reassessment after runtime, routing, Workflow, and distributed increments
 - [ ] Inbound API authentication
 - [ ] RBAC
 - [ ] Audit log
