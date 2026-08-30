@@ -94,6 +94,7 @@ The Engine resolves the already-selected Agent's runtime through a concurrency-s
 - Bounded Workflow DAG execution with sequential, fan-out, and fan-in Steps
 - Deterministic Workflow conditions and branching without `eval`
 - Control-plane-mediated Agent-to-Agent child Runs with bounded depth and fan-out
+- Real two-replica distributed acceptance test covering execution, recovery, SSE, leases, DLQ, and idempotency
 - Restart recovery for queued/running work
 
 ## API
@@ -210,6 +211,10 @@ go test -tags=integration -count=1 ./internal/integration
 docker compose down -v
 ```
 
+The suite includes two independent logical AgentMesh replicas connected to the
+same PostgreSQL, Redis, and NATS services. See [Multi-replica integration test](docs/multi-replica-testing.md)
+for the guarantees exercised and the remaining process/network test boundary.
+
 ## Docker
 
 `docker compose up --build` starts the complete distributed stack. For the lightweight local mode, use `go run ./cmd/agentmesh`.
@@ -238,6 +243,7 @@ docs/                   roadmap and architecture notes
 - [Architecture and delivery guarantees](docs/architecture.md)
 - [Agent Protocol V1](docs/agent-protocol-v1.md)
 - [External HTTP Agents](docs/external-agents.md)
+- [Multi-replica integration test](docs/multi-replica-testing.md)
 - [Configuration and operations](docs/configuration.md)
 - [API usage and examples](docs/api.md)
 - [Troubleshooting](docs/troubleshooting.md)

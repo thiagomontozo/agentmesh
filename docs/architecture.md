@@ -75,6 +75,14 @@ Fencing protects AgentMesh Run state, not arbitrary side effects already perform
 
 At startup, queued Runs are republished with their Run ID as the JetStream deduplication key. A running Run is never reset globally: the recovering Engine first attempts to acquire that Run's execution lease. A healthy owner keeps renewing the lease, so another replica skips its Run. After a crashed owner's lease expires, one recovering replica acquires ownership, atomically advances the persisted execution fence, resets the Run to `queued`, releases the recovery lease, and republishes work. A stale owner can no longer finalize after recovery. The operation is idempotent; competing recovery instances either fail lease acquisition or observe that the Run is no longer `running`.
 
+These guarantees are exercised by `TestRealMultiReplicaControlPlane`, which
+constructs two independent API/Engine/repository/cache/queue/event-bus stacks
+against shared PostgreSQL, Redis, and NATS services. It verifies cross-replica
+execution and reads, cross-replica SSE, normal non-duplication, lease-aware
+recovery, dead-letter delivery, and idempotency. Both replicas run in one Go test
+process, so host loss and network-partition behavior remain deployment-level test
+concerns. See [Multi-replica integration test](multi-replica-testing.md).
+
 ## Distributed events
 
 Memory mode retains the original in-process event bus. Distributed mode implements the same `events.Broker` contract with NATS pub/sub. An SSE client connected to replica A receives lifecycle events published by a worker on replica B. NATS preserves a publisher's message order on the shared Run-events subject; the local bus preserves arrival order per Run.

@@ -326,7 +326,7 @@ func TestDistributedRunLifecycleAndIdempotency(t *testing.T) {
 		lineageEvents[0].RootRunID != lineageRoot.ID {
 		t.Fatalf("PostgreSQL lineage event persistence: events=%+v err=%v", lineageEvents, err)
 	}
-	agentCallParent := domain.Run{ID: "run_agent_call_parent_" + suffix, AgentID: agent.ID, Status: domain.RunRunning, MaxAttempts: 1, CreatedAt: time.Now().UTC()}
+	agentCallParent := domain.Run{ID: "run_agent_call_parent_" + suffix, AgentID: agent.ID, Status: domain.RunSucceeded, MaxAttempts: 1, CreatedAt: time.Now().UTC()}
 	if _, _, err := repository.CreateRun(ctx, agentCallParent, ""); err != nil {
 		t.Fatal(err)
 	}
