@@ -366,6 +366,23 @@ func TestPostgreSQLWorkflowDefinitionPersistence(t *testing.T) {
 	if !slices.ContainsFunc(listed, func(candidate domain.Workflow) bool { return candidate.ID == want.ID }) {
 		t.Fatalf("created Workflow was not listed: %s", want.ID)
 	}
+	now := time.Now().UTC()
+	got.Status, got.StartedAt = domain.WorkflowRunning, &now
+	updated, err := repository.UpdateWorkflow(ctx, got, got.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Status != domain.WorkflowRunning || updated.Version != got.Version+1 {
+		t.Fatalf("PostgreSQL Workflow lifecycle was not updated: %+v", updated)
+	}
+	event := domain.WorkflowEvent{ID: "evt_" + suffix, WorkflowID: got.ID, Type: "workflow.started", Timestamp: now}
+	if err := repository.AppendWorkflowEvent(ctx, event, time.Hour, 100); err != nil {
+		t.Fatal(err)
+	}
+	events, err := repository.ListWorkflowEvents(ctx, got.ID, 100)
+	if err != nil || !slices.ContainsFunc(events, func(candidate domain.WorkflowEvent) bool { return candidate.ID == event.ID }) {
+		t.Fatalf("PostgreSQL Workflow event was not persisted: events=%+v err=%v", events, err)
+	}
 }
 
 func testDistributedSSE(

@@ -314,7 +314,15 @@ func (r *Repository) GetWorkflow(ctx context.Context, id string) (domain.Workflo
 }
 
 func (r *Repository) ListWorkflows(ctx context.Context) ([]domain.Workflow, error) {
-	rows, err := r.pool.Query(ctx, workflowSelect+" ORDER BY created_at, id")
+	return r.listWorkflows(ctx, workflowSelect+" ORDER BY created_at, id")
+}
+
+func (r *Repository) ListRunningWorkflows(ctx context.Context) ([]domain.Workflow, error) {
+	return r.listWorkflows(ctx, workflowSelect+" WHERE status = 'running' ORDER BY created_at, id")
+}
+
+func (r *Repository) listWorkflows(ctx context.Context, query string) ([]domain.Workflow, error) {
+	rows, err := r.pool.Query(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("list workflows: %w", err)
 	}
@@ -337,6 +345,108 @@ func (r *Repository) ListWorkflows(ctx context.Context) ([]domain.Workflow, erro
 		}
 	}
 	return result, nil
+}
+
+func (r *Repository) UpdateWorkflow(ctx context.Context, workflow domain.Workflow, expectedVersion int64) (domain.Workflow, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return domain.Workflow{}, fmt.Errorf("begin workflow update: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	command, err := tx.Exec(ctx, `UPDATE workflows SET status = $2, error = $3,
+		started_at = $4, completed_at = $5, version = version + 1
+		WHERE id = $1 AND version = $6`, workflow.ID, workflow.Status, workflow.Error,
+		workflow.StartedAt, workflow.CompletedAt, expectedVersion)
+	if err != nil {
+		return domain.Workflow{}, fmt.Errorf("update workflow: %w", err)
+	}
+	if command.RowsAffected() == 0 {
+		var current int64
+		if err := tx.QueryRow(ctx, "SELECT version FROM workflows WHERE id = $1", workflow.ID).Scan(&current); err == pgx.ErrNoRows {
+			return domain.Workflow{}, store.ErrNotFound
+		} else if err != nil {
+			return domain.Workflow{}, fmt.Errorf("classify workflow update: %w", err)
+		}
+		return domain.Workflow{}, fmt.Errorf("%w: current=%d expected=%d", store.ErrConflict, current, expectedVersion)
+	}
+	var count int
+	if err := tx.QueryRow(ctx, "SELECT count(*) FROM workflow_steps WHERE workflow_id = $1", workflow.ID).Scan(&count); err != nil {
+		return domain.Workflow{}, fmt.Errorf("count workflow steps: %w", err)
+	}
+	if count != len(workflow.Steps) {
+		return domain.Workflow{}, fmt.Errorf("workflow definition cannot change during execution")
+	}
+	for _, step := range workflow.Steps {
+		updated, err := tx.Exec(ctx, `UPDATE workflow_steps SET status = $3, run_id = $4,
+			output = $5, error = $6, started_at = $7, completed_at = $8
+			WHERE workflow_id = $1 AND id = $2`, workflow.ID, step.ID, step.Status,
+			nullableString(step.RunID), step.Output, step.Error, step.StartedAt, step.CompletedAt)
+		if err != nil {
+			return domain.Workflow{}, fmt.Errorf("update workflow step %s: %w", step.ID, err)
+		}
+		if updated.RowsAffected() != 1 {
+			return domain.Workflow{}, fmt.Errorf("workflow step %s definition cannot change during execution", step.ID)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return domain.Workflow{}, fmt.Errorf("commit workflow update: %w", err)
+	}
+	return r.GetWorkflow(ctx, workflow.ID)
+}
+
+func (r *Repository) AppendWorkflowEvent(ctx context.Context, event domain.WorkflowEvent, retention time.Duration, maxPerWorkflow int) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin workflow event append: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `INSERT INTO workflow_events
+		(event_id, workflow_id, step_id, run_id, type, message, timestamp)
+		VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (event_id) DO NOTHING`,
+		event.ID, event.WorkflowID, nullableString(event.StepID), nullableString(event.RunID),
+		event.Type, event.Message, event.Timestamp); err != nil {
+		return fmt.Errorf("insert workflow event: %w", err)
+	}
+	if maxPerWorkflow > 0 {
+		if _, err := tx.Exec(ctx, `DELETE FROM workflow_events WHERE workflow_id = $1
+			AND sequence < COALESCE((SELECT sequence FROM workflow_events WHERE workflow_id = $1
+			ORDER BY sequence DESC OFFSET $2 LIMIT 1), 0)`, event.WorkflowID, maxPerWorkflow-1); err != nil {
+			return fmt.Errorf("limit workflow events: %w", err)
+		}
+	}
+	if retention > 0 {
+		if _, err := tx.Exec(ctx, "DELETE FROM workflow_events WHERE timestamp < $1", time.Now().UTC().Add(-retention)); err != nil {
+			return fmt.Errorf("retain workflow events: %w", err)
+		}
+	}
+	return tx.Commit(ctx)
+}
+
+func (r *Repository) ListWorkflowEvents(ctx context.Context, workflowID string, limit int) ([]domain.WorkflowEvent, error) {
+	if _, err := r.GetWorkflow(ctx, workflowID); err != nil {
+		return nil, err
+	}
+	if limit <= 0 {
+		limit = 1000
+	}
+	rows, err := r.pool.Query(ctx, `SELECT event_id, workflow_id, COALESCE(step_id, ''),
+		COALESCE(run_id, ''), type, message, timestamp FROM (
+			SELECT sequence, event_id, workflow_id, step_id, run_id, type, message, timestamp
+			FROM workflow_events WHERE workflow_id = $1 ORDER BY sequence DESC LIMIT $2
+		) recent ORDER BY sequence`, workflowID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list workflow events: %w", err)
+	}
+	defer rows.Close()
+	events := make([]domain.WorkflowEvent, 0)
+	for rows.Next() {
+		var event domain.WorkflowEvent
+		if err := rows.Scan(&event.ID, &event.WorkflowID, &event.StepID, &event.RunID, &event.Type, &event.Message, &event.Timestamp); err != nil {
+			return nil, fmt.Errorf("scan workflow event: %w", err)
+		}
+		events = append(events, event)
+	}
+	return events, rows.Err()
 }
 
 func (r *Repository) listWorkflowSteps(ctx context.Context, workflowID string) ([]domain.WorkflowStep, error) {

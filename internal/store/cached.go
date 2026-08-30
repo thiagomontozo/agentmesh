@@ -194,6 +194,22 @@ func (c *Cached) ListWorkflows(ctx context.Context) ([]domain.Workflow, error) {
 	return c.inner.ListWorkflows(ctx)
 }
 
+func (c *Cached) UpdateWorkflow(ctx context.Context, workflow domain.Workflow, expectedVersion int64) (domain.Workflow, error) {
+	return c.inner.UpdateWorkflow(ctx, workflow, expectedVersion)
+}
+
+func (c *Cached) ListRunningWorkflows(ctx context.Context) ([]domain.Workflow, error) {
+	return c.inner.ListRunningWorkflows(ctx)
+}
+
+func (c *Cached) AppendWorkflowEvent(ctx context.Context, event domain.WorkflowEvent, retention time.Duration, maxPerWorkflow int) error {
+	return c.inner.AppendWorkflowEvent(ctx, event, retention, maxPerWorkflow)
+}
+
+func (c *Cached) ListWorkflowEvents(ctx context.Context, workflowID string, limit int) ([]domain.WorkflowEvent, error) {
+	return c.inner.ListWorkflowEvents(ctx, workflowID, limit)
+}
+
 func (c *Cached) Ping(ctx context.Context) error {
 	if err := c.inner.Ping(ctx); err != nil {
 		return err

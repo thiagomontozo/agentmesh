@@ -23,6 +23,7 @@ import (
 	"github.com/thiagomontozo/agentmesh/internal/queue"
 	agentruntime "github.com/thiagomontozo/agentmesh/internal/runtime"
 	"github.com/thiagomontozo/agentmesh/internal/store"
+	workflowengine "github.com/thiagomontozo/agentmesh/internal/workflow"
 )
 
 func newTestServer(t *testing.T) (*Server, context.CancelFunc) {
@@ -115,6 +116,49 @@ func TestWorkflowDefinitionHTTPRejectsInvalidDAGAndUnknownAgent(t *testing.T) {
 			t.Fatalf("expected %d, got %d: %s", test.want, response.Code, response.Body.String())
 		}
 	}
+}
+
+func TestSequentialWorkflowStartHTTP(t *testing.T) {
+	repository := store.NewMemory()
+	for _, id := range []string{"agt_a", "agt_b"} {
+		if _, err := repository.CreateAgent(context.Background(), domain.Agent{ID: id, Name: id}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	workflow, err := repository.CreateWorkflow(context.Background(), domain.Workflow{ID: "wf_http", Input: "document", Steps: []domain.WorkflowStep{
+		{ID: "a", AgentID: "agt_a", InputFrom: []string{"workflow"}},
+		{ID: "b", AgentID: "agt_b", DependsOn: []string{"a"}, InputFrom: []string{"a"}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runEngine := engine.New(repository, events.NewBus(), engine.DemoExecutor{Delay: time.Millisecond}, queue.NewMemory(8), coordination.NewMemory(), 1, engine.RetryPolicy{
+		MaxAttempts: 1, InitialBackoff: time.Millisecond, MaxBackoff: time.Millisecond, LeaseTTL: time.Minute,
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	runEngine.Start(ctx)
+	manager := workflowengine.New(repository, runEngine)
+	manager.Run(ctx)
+	defer func() { cancel(); manager.Stop(); runEngine.Stop() }()
+	server := New(repository, runEngine, events.NewBus())
+	server.SetWorkflowController(manager)
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/v1/workflows/"+workflow.ID+"/start", nil))
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("start Workflow: %d %s", response.Code, response.Body.String())
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		loaded, err := repository.GetWorkflow(context.Background(), workflow.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if loaded.Status == domain.WorkflowSucceeded {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("Workflow did not complete through HTTP start")
 }
 
 func TestRequestIDIsPreservedOrGenerated(t *testing.T) {
