@@ -6,9 +6,11 @@ versioning. Scores follow the project rubric: `0` absent, `1` initial concept,
 is not increased merely because related code exists.
 
 > Post-audit update: the critical platform increment added separate API/Worker
-> processes and cross-replica cancellation. The historical scores below describe
-> the Item 34 checkpoint; resolved critical gaps are tracked in the roadmap and
-> current architecture documentation.
+> processes with crash/restart acceptance coverage, cross-replica cancellation,
+> renewable Workflow scheduler ownership, and opt-in external-effect
+> idempotency. The historical scores below describe the Item 34 checkpoint;
+> resolved critical gaps are tracked here, in the roadmap, and in current
+> architecture documentation.
 
 ## Executive conclusion
 
@@ -80,15 +82,19 @@ Level 7 claim.
 
 ### Critical
 
-1. Add a process/container-level multi-replica acceptance test: independent
+1. ~~Add a process/container-level multi-replica acceptance test:~~ independent
    AgentMesh A/B processes, process kill, restart, valid-owner preservation,
-   cross-replica SSE, idempotency, lease/fence behavior, and DLQ.
+   cross-replica SSE, idempotency, and lease/fence behavior are now exercised by
+   `TestSeparateProcessesExecutePreserveAndRecoverRuns`; DLQ remains covered by
+   the real-dependency logical-replica test.
 2. ~~Add distributed Run cancellation signaling.~~ Resolved by per-Run event
    subscription with persisted polling fallback and a process-level test.
 3. ~~Define and enforce Workflow scheduler ownership.~~ Resolved with renewable
    per-Workflow coordination leases, periodic recovery scans, and takeover tests.
-4. Require and test Agent Protocol idempotency for irreversible external effects;
-   fencing protects AgentMesh state but cannot retract an Agent side effect.
+4. ~~Require and test Agent Protocol idempotency for irreversible external
+   effects.~~ Resolved with a stable per-Run effect key, opt-in strict Agent
+   acknowledgement, and a retry test that applies the reference external effect
+   once. AgentMesh still cannot prove atomic behavior inside a remote service.
 
 ### Important
 
@@ -119,7 +125,7 @@ Level 7 claim.
 | Dispatcher owns execution lifecycle | `internal/engine/engine.go`, `internal/queue/memory.go`, `internal/queue/nats.go` | `Engine.Start`, `Engine.execute`, `Engine.Recover`, `Enqueue`, `DeadLetter` | Worker consumption, attempts, timeout, retry/backoff, panic isolation, DLQ, leases, and recovery are implemented. |
 | Runtime is extensible | `internal/runtime/runtime.go`, `internal/runtime/resolver.go`, `internal/runtime/http.go` | `Runtime`, `ExecutionRequest`, `Registry.Resolve`, `HTTPRuntime.Execute` | Engine resolves an already-selected Agent to a runtime without transport-specific branching. |
 | HTTP execution is hardened/authenticated | `internal/runtime/http.go`, `internal/runtime/auth.go` | `HTTPPolicy`, `NewSecureHTTPRuntime`, `RequestAuthenticator`, `StaticAuthenticator` | Dial-time IP policy, payload bounds, TLS floor, redirect/decompression rejection, Bearer/API-key headers, and secret-safe configuration. |
-| Protocol is language-neutral and versioned | `internal/protocol/version.go`, `internal/protocol/v1/types.go` | `ValidateVersion`, `UnsupportedVersionError`, `RunRequest`, `RunResponse` | Stable V1 schema, idempotency key, structured errors, supported-version registry, and controlled incompatibility code. |
+| Protocol is language-neutral and versioned | `internal/protocol/version.go`, `internal/protocol/v1/types.go` | `ValidateVersion`, `UnsupportedVersionError`, `RunRequest`, `RunResponse`, `EffectIdempotencyKey` | Stable V1 schema, attempt/effect idempotency identities, structured errors, supported-version registry, and controlled incompatibility code. |
 | External languages share one contract | `internal/integration/external_agents_test.go` | `TestTwoExternalAgentsUseTheSameProtocolAndRuntime` | Two independent endpoints execute through the same HTTP Runtime without Agent-specific Engine code. |
 | Router selects automatically | `internal/router/router.go` | `Router.Select`, `rankAvailable` | Capability, health, load/capacity, priority, creation time, and ID produce a reproducible decision. |
 | Workflow orchestration is native | `internal/domain/workflow.go`, `internal/workflow/manager.go` | `Workflow`, `WorkflowStep`, `WorkflowCondition`, `Manager.StartWorkflow`, `Manager.Recover` | Persisted DAG lifecycle reuses Runs and supports sequential, parallel, fan-in, branching, cancellation, and recovery. |
@@ -128,6 +134,7 @@ Level 7 claim.
 | Logs are correlated | `internal/observability/context.go`, `internal/engine/engine.go`, `internal/httpapi/server.go` | `ContextAttrs`, `runLogAttrs`, request middleware | Request, instance, worker, Run, Agent, attempt, and duration fields are emitted when available. |
 | Leases/fencing reject stale owners | `internal/cache/redis.go`, `internal/engine/engine.go`, `internal/store/postgres/postgres.go` | `Acquire`, `redisLease.Renew`, `ClaimRunExecution`, `UpdateRunFenced`, `RecoverRun` | Ownership is renewed and every terminal state write must carry the current execution fence. |
 | Distributed baseline is tested | `internal/integration/multi_replica_test.go` | `TestRealMultiReplicaControlPlane` | Cross-replica execution/read/SSE, normal non-duplication, DLQ, valid-owner recovery protection, expired-lease recovery, and idempotency use real dependencies. |
-| Separate-process behavior | `internal/integration/multi_replica_test.go` | Test construction | **NOT PROVEN:** both replica stacks execute in one Go test process. |
+| Separate-process behavior | `internal/integration/process_replicas_test.go` | `TestSeparateProcessesExecutePreserveAndRecoverRuns` | API and worker binaries prove cross-process execution/SSE/cancellation, valid-owner preservation, hard-kill recovery after lease expiry, and API restart. |
 | Metrics and tracing | repository-wide code | — | **NOT PROVEN:** no metrics exporter or distributed tracing implementation exists. |
 | Immediate distributed cancellation | `internal/engine/engine.go`, `internal/integration/process_replicas_test.go` | `Engine.Cancel`, `watchCancellation`, `TestSeparateProcessesExecutePreserveAndRecoverRuns` | Proven for context-aware runtimes across API and worker processes through NATS events with persisted polling fallback. |
+| External effects reuse one retry identity | `internal/runtime/http.go`, `internal/integration/external_agents_test.go` | `HTTPRuntime.Execute`, `TestExternalEffectIsAppliedOnceAcrossRetry` | Attempt keys change while the stable effect key is reused and strictly acknowledged; the reference Agent commits one effect across a `500` retry. |

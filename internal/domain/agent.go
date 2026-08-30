@@ -8,19 +8,22 @@ import (
 )
 
 type Agent struct {
-	ID             string    `json:"id"`
-	Name           string    `json:"name"`
-	SystemPrompt   string    `json:"system_prompt"`
-	Runtime        string    `json:"runtime,omitempty"`
-	Protocol       string    `json:"protocol,omitempty"`
-	Endpoint       string    `json:"endpoint,omitempty"`
-	Capabilities   []string  `json:"capabilities,omitempty"`
-	MaxConcurrency int       `json:"max_concurrency,omitempty"`
-	Priority       int       `json:"priority,omitempty"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
-	Version        int64     `json:"version"`
+	ID                string    `json:"id"`
+	Name              string    `json:"name"`
+	SystemPrompt      string    `json:"system_prompt"`
+	Runtime           string    `json:"runtime,omitempty"`
+	Protocol          string    `json:"protocol,omitempty"`
+	Endpoint          string    `json:"endpoint,omitempty"`
+	Capabilities      []string  `json:"capabilities,omitempty"`
+	EffectIdempotency string    `json:"effect_idempotency,omitempty"`
+	MaxConcurrency    int       `json:"max_concurrency,omitempty"`
+	Priority          int       `json:"priority,omitempty"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
+	Version           int64     `json:"version"`
 }
+
+const EffectIdempotencyRequired = "required"
 
 func (a *Agent) InitializeForCreate(now time.Time) error {
 	if err := a.NormalizeAndValidate(); err != nil {
@@ -53,6 +56,7 @@ func (a *Agent) NormalizeAndValidate() error {
 	a.Runtime = strings.ToLower(strings.TrimSpace(a.Runtime))
 	a.Protocol = strings.ToLower(strings.TrimSpace(a.Protocol))
 	a.Endpoint = strings.TrimSpace(a.Endpoint)
+	a.EffectIdempotency = strings.ToLower(strings.TrimSpace(a.EffectIdempotency))
 
 	if a.ID == "" {
 		return fmt.Errorf("agent id is required")
@@ -77,6 +81,12 @@ func (a *Agent) NormalizeAndValidate() error {
 		if err != nil || parsed.Scheme == "" || (parsed.Host == "" && parsed.Opaque == "" && parsed.Path == "") {
 			return fmt.Errorf("endpoint must be an absolute URI")
 		}
+	}
+	if a.EffectIdempotency != "" && a.EffectIdempotency != EffectIdempotencyRequired {
+		return fmt.Errorf("effect_idempotency must be empty or %q", EffectIdempotencyRequired)
+	}
+	if a.EffectIdempotency != "" && (a.Runtime == "" || a.Protocol == "") {
+		return fmt.Errorf("effect_idempotency requires runtime and protocol")
 	}
 	if a.MaxConcurrency < 0 {
 		return fmt.Errorf("max_concurrency cannot be negative")

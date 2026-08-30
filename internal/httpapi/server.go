@@ -297,14 +297,15 @@ func (s *Server) ready(w http.ResponseWriter, r *http.Request) {
 }
 
 type createAgentRequest struct {
-	Name           string   `json:"name"`
-	SystemPrompt   string   `json:"system_prompt"`
-	Runtime        string   `json:"runtime"`
-	Protocol       string   `json:"protocol"`
-	Endpoint       string   `json:"endpoint"`
-	Capabilities   []string `json:"capabilities"`
-	MaxConcurrency int      `json:"max_concurrency"`
-	Priority       int      `json:"priority"`
+	Name              string   `json:"name"`
+	SystemPrompt      string   `json:"system_prompt"`
+	Runtime           string   `json:"runtime"`
+	Protocol          string   `json:"protocol"`
+	Endpoint          string   `json:"endpoint"`
+	Capabilities      []string `json:"capabilities"`
+	EffectIdempotency string   `json:"effect_idempotency"`
+	MaxConcurrency    int      `json:"max_concurrency"`
+	Priority          int      `json:"priority"`
 }
 
 func (s *Server) createAgent(w http.ResponseWriter, r *http.Request) {
@@ -315,16 +316,17 @@ func (s *Server) createAgent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	agent := domain.Agent{
-		ID:             newID("agt"),
-		Name:           request.Name,
-		SystemPrompt:   request.SystemPrompt,
-		Runtime:        request.Runtime,
-		Protocol:       request.Protocol,
-		Endpoint:       request.Endpoint,
-		Capabilities:   request.Capabilities,
-		MaxConcurrency: request.MaxConcurrency,
-		Priority:       request.Priority,
-		CreatedAt:      time.Now().UTC(),
+		ID:                newID("agt"),
+		Name:              request.Name,
+		SystemPrompt:      request.SystemPrompt,
+		Runtime:           request.Runtime,
+		Protocol:          request.Protocol,
+		Endpoint:          request.Endpoint,
+		Capabilities:      request.Capabilities,
+		EffectIdempotency: request.EffectIdempotency,
+		MaxConcurrency:    request.MaxConcurrency,
+		Priority:          request.Priority,
+		CreatedAt:         time.Now().UTC(),
 	}
 	if err := agent.NormalizeAndValidate(); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -449,9 +451,10 @@ func (s *Server) updateAgent(w http.ResponseWriter, r *http.Request) {
 	agent := domain.Agent{
 		ID: id, Name: request.Name, SystemPrompt: request.SystemPrompt,
 		Runtime: request.Runtime, Protocol: request.Protocol, Endpoint: request.Endpoint,
-		Capabilities:   request.Capabilities,
-		MaxConcurrency: request.MaxConcurrency,
-		Priority:       request.Priority,
+		Capabilities:      request.Capabilities,
+		EffectIdempotency: request.EffectIdempotency,
+		MaxConcurrency:    request.MaxConcurrency,
+		Priority:          request.Priority,
 	}
 	if err := agent.NormalizeAndValidate(); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())

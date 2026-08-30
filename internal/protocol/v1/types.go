@@ -23,12 +23,13 @@ const (
 )
 
 type RunRequest struct {
-	ProtocolVersion string `json:"protocol_version"`
-	RunID           string `json:"run_id"`
-	AgentID         string `json:"agent_id"`
-	Attempt         int    `json:"attempt"`
-	IdempotencyKey  string `json:"idempotency_key"`
-	Input           string `json:"input"`
+	ProtocolVersion      string `json:"protocol_version"`
+	RunID                string `json:"run_id"`
+	AgentID              string `json:"agent_id"`
+	Attempt              int    `json:"attempt"`
+	IdempotencyKey       string `json:"idempotency_key"`
+	EffectIdempotencyKey string `json:"effect_idempotency_key,omitempty"`
+	Input                string `json:"input"`
 }
 
 func (r RunRequest) Validate() error {
@@ -57,12 +58,19 @@ func AttemptIdempotencyKey(runID string, attempt int) string {
 	return runID + ":" + strconv.Itoa(attempt)
 }
 
+// EffectIdempotencyKey returns the stable identity of external effects for a
+// Run. Unlike AttemptIdempotencyKey, it is deliberately reused by every retry.
+func EffectIdempotencyKey(runID string) string {
+	return runID
+}
+
 type RunResponse struct {
-	ProtocolVersion string    `json:"protocol_version"`
-	RunID           string    `json:"run_id"`
-	Status          RunStatus `json:"status"`
-	Output          string    `json:"output,omitempty"`
-	Error           *RunError `json:"error,omitempty"`
+	ProtocolVersion      string    `json:"protocol_version"`
+	RunID                string    `json:"run_id"`
+	Status               RunStatus `json:"status"`
+	Output               string    `json:"output,omitempty"`
+	Error                *RunError `json:"error,omitempty"`
+	EffectIdempotencyKey string    `json:"effect_idempotency_key,omitempty"`
 }
 
 func (r RunResponse) Validate() error {

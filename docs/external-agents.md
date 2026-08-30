@@ -12,7 +12,8 @@ curl -X POST http://localhost:8080/api/v1/agents \
     "runtime":"remote",
     "protocol":"http",
     "endpoint":"http://legal-agent:9000",
-    "capabilities":["legal-search","legal-analysis","summarization"]
+    "capabilities":["legal-search","legal-analysis","summarization"],
+    "effect_idempotency":"required"
   }'
 
 curl -X POST http://localhost:8080/api/v1/agents \
@@ -51,3 +52,5 @@ The test servers are written in Go only as lightweight test infrastructure. No G
 ## Adding another Agent
 
 A third HTTP Agent using Protocol V1 can be added through `POST /api/v1/agents` while AgentMesh is running. It does not require a new Go executor, source-code change, recompilation, or restart. The caller may select its `agent_id` or supply exact `required_capabilities`; free-text semantic routing remains outside Router V1.
+
+For an Agent that commits irreversible external effects, declare `effect_idempotency: "required"`. AgentMesh then reuses one effect key across retries and requires the Agent response to acknowledge it. The Agent must implement the actual deduplication atomically; registration alone cannot make a non-idempotent external operation safe.

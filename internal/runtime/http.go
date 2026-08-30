@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/thiagomontozo/agentmesh/internal/domain"
 	"github.com/thiagomontozo/agentmesh/internal/protocol"
 	protocolv1 "github.com/thiagomontozo/agentmesh/internal/protocol/v1"
 )
@@ -170,12 +171,13 @@ func (h *HTTPRuntime) Execute(ctx context.Context, request ExecutionRequest) (Ex
 	}
 
 	wireRequest := protocolv1.RunRequest{
-		ProtocolVersion: protocolv1.Version,
-		RunID:           request.RunID,
-		AgentID:         request.AgentID(),
-		Attempt:         request.Attempt,
-		IdempotencyKey:  protocolv1.AttemptIdempotencyKey(request.RunID, request.Attempt),
-		Input:           request.Input,
+		ProtocolVersion:      protocolv1.Version,
+		RunID:                request.RunID,
+		AgentID:              request.AgentID(),
+		Attempt:              request.Attempt,
+		IdempotencyKey:       protocolv1.AttemptIdempotencyKey(request.RunID, request.Attempt),
+		EffectIdempotencyKey: protocolv1.EffectIdempotencyKey(request.RunID),
+		Input:                request.Input,
 	}
 	if err := wireRequest.Validate(); err != nil {
 		return ExecutionResult{}, &HTTPError{Kind: HTTPErrorProtocol, Err: err}
@@ -196,6 +198,7 @@ func (h *HTTPRuntime) Execute(ctx context.Context, request ExecutionRequest) (Ex
 	httpRequest.Header.Set("Accept", "application/json")
 	httpRequest.Header.Set("Accept-Encoding", "identity")
 	httpRequest.Header.Set("Idempotency-Key", wireRequest.IdempotencyKey)
+	httpRequest.Header.Set(protocol.HeaderEffectIdempotency, wireRequest.EffectIdempotencyKey)
 	httpRequest.Header.Set(protocol.HeaderVersion, protocolv1.Version)
 	if err := h.authenticator.Authenticate(ctx, request.Agent, httpRequest); err != nil {
 		return ExecutionResult{}, &HTTPError{Kind: HTTPErrorPermanent, Err: ErrAuthentication}
@@ -241,6 +244,14 @@ func (h *HTTPRuntime) Execute(ctx context.Context, request ExecutionRequest) (Ex
 	}
 	if wireResponse.RunID != request.RunID {
 		return ExecutionResult{}, protocolError("response run_id %q does not match request", wireResponse.RunID)
+	}
+	if request.Agent.EffectIdempotency == domain.EffectIdempotencyRequired &&
+		wireResponse.EffectIdempotencyKey != wireRequest.EffectIdempotencyKey {
+		return ExecutionResult{}, &HTTPError{
+			Kind: HTTPErrorProtocol, Code: protocol.CodeEffectIdempotency,
+			Err: fmt.Errorf("response effect_idempotency_key %q does not acknowledge request %q",
+				wireResponse.EffectIdempotencyKey, wireRequest.EffectIdempotencyKey),
+		}
 	}
 	if wireResponse.Status == protocolv1.StatusFailed {
 		kind := HTTPErrorPermanent

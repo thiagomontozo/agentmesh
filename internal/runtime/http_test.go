@@ -45,8 +45,12 @@ func TestHTTPRuntimeSuccess(t *testing.T) {
 		if payload.IdempotencyKey != "run_1:2" || request.Header.Get("Idempotency-Key") != payload.IdempotencyKey {
 			t.Errorf("unexpected idempotency identity: body=%q header=%q", payload.IdempotencyKey, request.Header.Get("Idempotency-Key"))
 		}
+		if payload.EffectIdempotencyKey != "run_1" || request.Header.Get(protocol.HeaderEffectIdempotency) != payload.EffectIdempotencyKey {
+			t.Errorf("unexpected stable effect identity: body=%q header=%q", payload.EffectIdempotencyKey, request.Header.Get(protocol.HeaderEffectIdempotency))
+		}
 		writeRuntimeResponse(t, response, protocolv1.RunResponse{
 			ProtocolVersion: protocolv1.Version, RunID: payload.RunID, Status: protocolv1.StatusSucceeded, Output: "done",
+			EffectIdempotencyKey: payload.EffectIdempotencyKey,
 		})
 	}))
 	defer server.Close()
@@ -57,6 +61,38 @@ func TestHTTPRuntimeSuccess(t *testing.T) {
 	}
 	if result.Output != "done" {
 		t.Fatalf("unexpected result: %+v", result)
+	}
+}
+
+func TestHTTPRuntimeRequiresEffectIdempotencyAcknowledgementWhenDeclared(t *testing.T) {
+	tests := []struct {
+		name string
+		key  string
+	}{
+		{name: "missing"},
+		{name: "mismatched", key: "run_other"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+				writeRuntimeResponse(t, response, protocolv1.RunResponse{
+					ProtocolVersion: protocolv1.Version, RunID: "run_1", Status: protocolv1.StatusSucceeded,
+					EffectIdempotencyKey: test.key,
+				})
+			}))
+			defer server.Close()
+
+			runtime := agentruntime.NewHTTPRuntime(server.Client(), 0)
+			_, err := runtime.Execute(context.Background(), agentruntime.ExecutionRequest{
+				RunID: "run_1", Attempt: 2,
+				Agent: domain.Agent{ID: "agt_1", Runtime: agentruntime.RemoteRuntime, Protocol: agentruntime.HTTPProtocol,
+					Endpoint: server.URL, EffectIdempotency: domain.EffectIdempotencyRequired},
+			})
+			httpError := requireHTTPError(t, err, agentruntime.HTTPErrorProtocol, 0)
+			if httpError.Code != protocol.CodeEffectIdempotency {
+				t.Fatalf("unexpected protocol error: %+v", httpError)
+			}
+		})
 	}
 }
 

@@ -69,7 +69,8 @@ func TestDistributedRunLifecycleAndIdempotency(t *testing.T) {
 	configuredAgent := domain.Agent{
 		ID: "agt_configured_" + suffix, Name: "configured", Runtime: "remote", Protocol: "http",
 		Endpoint: "http://agent:9000", Capabilities: []string{"testing", "debugging"},
-		MaxConcurrency: 4, Priority: 25, CreatedAt: time.Now().UTC(),
+		EffectIdempotency: domain.EffectIdempotencyRequired,
+		MaxConcurrency:    4, Priority: 25, CreatedAt: time.Now().UTC(),
 	}
 	if _, err := repository.CreateAgent(ctx, configuredAgent); err != nil {
 		t.Fatal(err)
@@ -80,6 +81,7 @@ func TestDistributedRunLifecycleAndIdempotency(t *testing.T) {
 	}
 	if loadedAgent.Runtime != configuredAgent.Runtime || loadedAgent.Protocol != configuredAgent.Protocol ||
 		loadedAgent.Endpoint != configuredAgent.Endpoint || !slices.Equal(loadedAgent.Capabilities, configuredAgent.Capabilities) ||
+		loadedAgent.EffectIdempotency != domain.EffectIdempotencyRequired ||
 		loadedAgent.MaxConcurrency != 4 || loadedAgent.Priority != 25 {
 		t.Fatalf("agent execution metadata was not persisted: got=%+v want=%+v", loadedAgent, configuredAgent)
 	}
@@ -94,6 +96,7 @@ func TestDistributedRunLifecycleAndIdempotency(t *testing.T) {
 	}
 	if updatedAgent.Version != loadedAgent.Version+1 || !updatedAgent.CreatedAt.Equal(loadedAgent.CreatedAt) ||
 		updatedAgent.Endpoint != configuredAgent.Endpoint || !slices.Equal(updatedAgent.Capabilities, configuredAgent.Capabilities) ||
+		updatedAgent.EffectIdempotency != domain.EffectIdempotencyRequired ||
 		updatedAgent.MaxConcurrency != 8 || updatedAgent.Priority != 50 {
 		t.Fatalf("PostgreSQL Agent update was not persisted: %+v", updatedAgent)
 	}

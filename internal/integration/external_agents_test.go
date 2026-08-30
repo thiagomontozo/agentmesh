@@ -92,20 +92,115 @@ func TestTwoExternalAgentsUseTheSameProtocolAndRuntime(t *testing.T) {
 	assertProtocolRequest(t, codeEndpoint.SingleRequest(t), codeRun.ID, codeAgent.ID, "Review this code")
 }
 
+func TestExternalEffectIsAppliedOnceAcrossRetry(t *testing.T) {
+	var calls atomic.Int32
+	var effects atomic.Int32
+	var mu sync.Mutex
+	requests := make([]protocolv1.RunRequest, 0, 2)
+	headers := make([]string, 0, 2)
+	seenEffects := make(map[string]struct{})
+	agentServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		var protocolRequest protocolv1.RunRequest
+		if err := json.NewDecoder(request.Body).Decode(&protocolRequest); err != nil {
+			t.Errorf("decode Agent Protocol request: %v", err)
+			response.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		mu.Lock()
+		requests = append(requests, protocolRequest)
+		headers = append(headers, request.Header.Get("Agent-Effect-Idempotency-Key"))
+		if _, duplicate := seenEffects[protocolRequest.EffectIdempotencyKey]; !duplicate {
+			seenEffects[protocolRequest.EffectIdempotencyKey] = struct{}{}
+			effects.Add(1)
+		}
+		mu.Unlock()
+		if calls.Add(1) == 1 {
+			response.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		response.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(response).Encode(protocolv1.RunResponse{
+			ProtocolVersion:      protocolv1.Version,
+			RunID:                protocolRequest.RunID,
+			Status:               protocolv1.StatusSucceeded,
+			Output:               "effect already committed",
+			EffectIdempotencyKey: protocolRequest.EffectIdempotencyKey,
+		})
+	}))
+	defer agentServer.Close()
+
+	repository := store.NewMemory()
+	runQueue := queue.NewMemory(4)
+	resolver := agentruntime.NewRegistry(agentruntime.AdaptLegacy(engine.DemoExecutor{}))
+	if err := resolver.Register(agentruntime.RemoteRuntime, agentruntime.NewHTTPRuntime(agentServer.Client(), 0)); err != nil {
+		t.Fatal(err)
+	}
+	runEngine := engine.NewWithResolver(
+		repository, events.NewBus(), resolver, runQueue, coordination.NewMemory(), 1,
+		engine.RetryPolicy{MaxAttempts: 2, InitialBackoff: time.Millisecond, MaxBackoff: time.Millisecond, LeaseTTL: time.Minute},
+	)
+	engineContext, stopEngine := context.WithCancel(context.Background())
+	runEngine.Start(engineContext)
+	defer func() {
+		stopEngine()
+		runEngine.Stop()
+	}()
+
+	agent, err := repository.CreateAgent(context.Background(), domain.Agent{
+		ID: "agt_effect", Name: "effect-agent", Runtime: agentruntime.RemoteRuntime,
+		Protocol: agentruntime.HTTPProtocol, Endpoint: agentServer.URL,
+		EffectIdempotency: domain.EffectIdempotencyRequired,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, isNew, err := repository.CreateRun(context.Background(), domain.Run{
+		ID: "run_effect", AgentID: agent.ID, Input: "commit external effect",
+		Status: domain.RunQueued, MaxAttempts: 2, CreatedAt: time.Now().UTC(),
+	}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !isNew {
+		t.Fatal("expected a new Run")
+	}
+	if err := runEngine.Enqueue(context.Background(), run.ID); err != nil {
+		t.Fatal(err)
+	}
+	completed := waitForRemoteRun(t, repository, run.ID)
+	if completed.Attempt != 2 || calls.Load() != 2 || effects.Load() != 1 {
+		t.Fatalf("unexpected retry/effect counts: run=%+v calls=%d effects=%d", completed, calls.Load(), effects.Load())
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(requests) != 2 || requests[0].IdempotencyKey == requests[1].IdempotencyKey {
+		t.Fatalf("attempt identities must differ: %+v", requests)
+	}
+	stable := protocolv1.EffectIdempotencyKey(run.ID)
+	for index, request := range requests {
+		if request.EffectIdempotencyKey != stable || headers[index] != stable {
+			t.Fatalf("retry %d changed effect identity: body=%q header=%q want=%q", index+1, request.EffectIdempotencyKey, headers[index], stable)
+		}
+	}
+}
+
 type agentDefinition struct {
-	Name         string
-	Endpoint     string
-	Capabilities []string
+	Name              string
+	Endpoint          string
+	Capabilities      []string
+	EffectIdempotency string
 }
 
 func createRemoteAgent(t *testing.T, handler http.Handler, definition agentDefinition) domain.Agent {
 	t.Helper()
 	payload := map[string]any{
-		"name":         definition.Name,
-		"runtime":      agentruntime.RemoteRuntime,
-		"protocol":     agentruntime.HTTPProtocol,
-		"endpoint":     definition.Endpoint,
-		"capabilities": definition.Capabilities,
+		"name":               definition.Name,
+		"runtime":            agentruntime.RemoteRuntime,
+		"protocol":           agentruntime.HTTPProtocol,
+		"endpoint":           definition.Endpoint,
+		"capabilities":       definition.Capabilities,
+		"effect_idempotency": definition.EffectIdempotency,
 	}
 	var agent domain.Agent
 	postJSON(t, handler, "/api/v1/agents", payload, http.StatusCreated, &agent)
