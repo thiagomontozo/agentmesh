@@ -81,6 +81,12 @@ Memory mode is the default. It uses a mutex-protected repository and bounded Go 
 
 Distributed mode is enabled with `AGENTMESH_MODE=distributed`:
 
+The default `all` process can be split into `api` and `worker` roles. API-only
+processes produce queue work but do not consume or recover Runs; worker-only
+processes consume and recover without exposing HTTP. Memory mode remains
+combined-only. A process-level integration test covers API restart, worker crash,
+lease expiry, and replacement recovery. See [Process roles](process-roles.md).
+
 - PostgreSQL stores agents, run state, attempt counters, timestamps, idempotency keys, and bounded Run event history. Embedded, ordered SQL migrations run at startup.
 - NATS JetStream durably stores run work. A named stream and durable pull consumer use explicit acknowledgements. Executor failures are retried by the engine; exhausted runs are published to `agentmesh.runs.dlq` before being marked failed.
 - NATS core pub/sub transports live Run events between replicas on one ordered subject. Each event is assigned a stable `event_id` and persisted before live publication. `NoEcho` prevents a publisher's own NATS subscription from duplicating the event, while ID-based local deduplication protects replay/live overlap.

@@ -2,6 +2,10 @@
 
 AgentMesh reads configuration from environment variables. Copy `.env.example` when preparing a local environment, but do not commit credentials or production connection strings.
 
+`AGENTMESH_ROLE` defaults to `all`. The `api` and `worker` roles require
+distributed mode and shared PostgreSQL, Redis, and NATS dependencies. See
+[Process roles](process-roles.md).
+
 ## Runtime modes
 
 ### Memory

@@ -98,6 +98,7 @@ The Engine resolves the already-selected Agent's runtime through a concurrency-s
 - Deterministic Workflow conditions and branching without `eval`
 - Control-plane-mediated Agent-to-Agent child Runs with bounded depth and fan-out
 - Real two-replica distributed acceptance test covering execution, recovery, SSE, leases, DLQ, and idempotency
+- Independent `all`/`api`/`worker` process roles with crash/restart acceptance coverage
 - Restart recovery for queued/running work
 
 ## API
@@ -174,6 +175,7 @@ With the server running in one terminal:
 | `AGENTMESH_ADDR` | `:8080` | HTTP bind address |
 | `AGENTMESH_INSTANCE_ID` | generated | Stable replica name; set explicitly in production |
 | `AGENTMESH_MODE` | `memory` | `memory` or `distributed` runtime |
+| `AGENTMESH_ROLE` | `all` | `all`, `api`, or `worker`; split roles require distributed mode |
 | `AGENTMESH_WORKERS` | `4` | Worker goroutines |
 | `AGENTMESH_WORKFLOW_CONCURRENCY` | `4` | Maximum active Steps per Workflow |
 | `AGENTMESH_AGENT_CALL_MAX_DEPTH` | `8` | Maximum Agent-to-Agent ancestry depth |
@@ -257,6 +259,7 @@ docs/                   roadmap and architecture notes
 - [External HTTP Agents](docs/external-agents.md)
 - [Multi-replica integration test](docs/multi-replica-testing.md)
 - [API and Worker separation analysis](docs/api-worker-separation-analysis.md)
+- [Process roles and process-level replica test](docs/process-roles.md)
 - [HTTP Runtime security](docs/http-runtime-security.md)
 - [Agent request authentication](docs/agent-authentication.md)
 - [Agent Protocol versioning](docs/protocol-versioning.md)

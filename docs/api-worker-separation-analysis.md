@@ -1,16 +1,22 @@
 # API and Worker process separation analysis
 
+> Outcome: the later critical distributed-platform increment implemented the
+> recommended backward-compatible `AGENTMESH_ROLE=all|api|worker` seam and a
+> process-level acceptance test. The analysis below records the decision basis;
+> current behavior is documented in [Process roles](process-roles.md).
+
 ## Decision
 
-Do not split the current command yet. Keep `agentmesh` as the default combined
+At the time of this analysis, the decision was not to split the command yet and
+to keep `agentmesh` as the default combined
 API, Workflow scheduler, and Run worker process. A later, backward-compatible
 increment should introduce an explicit role such as
 `AGENTMESH_ROLE=all|api|worker`, with `all` as the default. Separation is useful
 for independent scaling and a smaller API failure domain, but the current
 component boundaries are not yet sufficient to make an API-only process honest.
 
-This is an analysis only. No command, configuration, startup behavior, or
-deployment topology changes in this item.
+This document was analysis only; the subsequent implementation followed its
+incremental design while retaining `all` as the default.
 
 ## Current startup ownership
 

@@ -12,6 +12,7 @@ import (
 type Config struct {
 	Addr                 string
 	Mode                 string
+	Role                 string
 	Workers              int
 	QueueSize            int
 	ExecutionDelay       time.Duration
@@ -51,6 +52,13 @@ func Load() (Config, error) {
 	mode := stringEnv("AGENTMESH_MODE", "memory")
 	if mode != "memory" && mode != "distributed" {
 		return Config{}, fmt.Errorf("AGENTMESH_MODE must be memory or distributed")
+	}
+	role := stringEnv("AGENTMESH_ROLE", "all")
+	if role != "all" && role != "api" && role != "worker" {
+		return Config{}, fmt.Errorf("AGENTMESH_ROLE must be all, api or worker")
+	}
+	if role != "all" && mode != "distributed" {
+		return Config{}, fmt.Errorf("AGENTMESH_ROLE api or worker requires distributed mode")
 	}
 	workers, err := intEnv("AGENTMESH_WORKERS", 4)
 	if err != nil {
@@ -226,6 +234,7 @@ func Load() (Config, error) {
 	return Config{
 		Addr:                 stringEnv("AGENTMESH_ADDR", ":8080"),
 		Mode:                 mode,
+		Role:                 role,
 		Workers:              workers,
 		QueueSize:            queueSize,
 		ExecutionDelay:       executionDelay,

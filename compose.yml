@@ -50,6 +50,7 @@ services:
       AGENTMESH_ADDR: ":8080"
       AGENTMESH_INSTANCE_ID: "agentmesh-compose"
       AGENTMESH_MODE: "distributed"
+      AGENTMESH_ROLE: "all"
       AGENTMESH_WORKERS: "4"
       AGENTMESH_EXECUTION_DELAY: "750ms"
       AGENTMESH_ATTEMPT_TIMEOUT: "30s"

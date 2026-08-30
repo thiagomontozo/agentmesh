@@ -60,6 +60,7 @@
 - [x] Outbound Agent Bearer/API-key authentication abstraction
 - [x] Formal Agent Protocol version compatibility and unsupported-version errors
 - [x] Evidence-based architectural reassessment after runtime, routing, Workflow, and distributed increments
+- [x] Independent API/Worker process roles and crash/restart acceptance test
 - [ ] Inbound API authentication
 - [ ] RBAC
 - [ ] Audit log
