@@ -16,8 +16,9 @@ Each logical replica owns separate PostgreSQL pools, Redis clients, NATS JetStre
 clients, persistent NATS event buses, HTTP servers, Engine lifecycles, instance
 IDs, and executors. They share only the external distributed services and the Go
 test process. This catches replica-bound state and coordination errors while
-remaining deterministic enough for CI. It is not a process, container, network
-partition, or production load test.
+remaining deterministic enough for CI. Separate tests now cover production OS
+processes, dependency outage/recovery, and a bounded concurrent workload; none
+of these is a production capacity benchmark.
 
 ## Guarantees exercised
 
@@ -62,11 +63,16 @@ Passing this test establishes a strong distributed-control-plane baseline, not
 an unrestricted exactly-once guarantee. JetStream delivery is at least once;
 Redis leases and PostgreSQL fencing prevent stale Run-state finalization, while
 Agent Protocol idempotency is still required for irreversible side effects in a
-remote Agent. Failure modes such as host loss, network partitions, DNS failure,
-slow storage, rolling upgrades, and sustained load require separate container or
-deployment-level tests.
+remote Agent. The resilience suite covers a stalled PostgreSQL dependency,
+complete Redis/NATS outages, client recovery, and concurrent multi-worker load.
+Failure modes such as host loss, asymmetric network partitions, DNS failure,
+long-duration soak, and resource exhaustion still require deployment-level
+tests.
 
 The additional process-level test builds the production binary and exercises
 independent `api` and `worker` OS processes, including API restart, hard worker
 failure, lease expiry, and replacement-worker recovery. See
 [Process roles](process-roles.md).
+
+The operational failure and load evidence is documented in
+[Resilience and load testing](resilience-and-load-testing.md).

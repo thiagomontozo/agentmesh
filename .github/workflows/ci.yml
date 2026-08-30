@@ -85,3 +85,28 @@ jobs:
       - name: Stop distributed dependencies
         if: always()
         run: docker compose down -v
+
+  resilience:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: "1.23.x"
+          cache: true
+
+      - name: Build production binary
+        run: go build -o "$RUNNER_TEMP/agentmesh-current" ./cmd/agentmesh
+
+      - name: Start distributed dependencies
+        run: docker compose up -d --wait postgres nats redis
+
+      - name: Dependency outage and recovery
+        run: scripts/dependency-resilience-test.sh "$RUNNER_TEMP/agentmesh-current"
+
+      - name: Stop distributed dependencies
+        if: always()
+        run: docker compose down -v

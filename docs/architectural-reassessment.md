@@ -10,7 +10,9 @@ is not increased merely because related code exists.
 > renewable Workflow scheduler ownership, and opt-in external-effect
 > idempotency. The subsequent important increment added inbound RBAC, durable
 > audit records, request-time secret rotation, bounded metrics, and a real
-> mixed-version compatibility gate. The historical scores below describe the Item 34 checkpoint;
+> mixed-version compatibility gate. A further operational increment added
+> dependency outage/recovery and concurrent multi-worker load gates. The
+> historical scores below describe the Item 34 checkpoint;
 > resolved critical gaps are tracked here, in the roadmap, and in current
 > architecture documentation.
 
@@ -117,7 +119,12 @@ Level 7 claim.
 
 ### Desirable
 
-1. Add deployment-level network partition, dependency latency, and load tests.
+1. ~~Add dependency latency/outage and bounded concurrent load tests.~~ Resolved
+   for CI by pausing PostgreSQL, stopping/restarting Redis and NATS, proving
+   readiness degradation/recovery, completing a post-recovery Run, and checking
+   120 concurrent Runs across two worker processes without duplicate starts.
+   Asymmetric partitions, DNS faults, capacity benchmarks, and soak tests remain
+   deployment concerns.
 2. Add tracing only when cross-service latency diagnosis justifies its cost.
 3. Add Kubernetes/Helm examples after process-role and readiness semantics are
    implemented and proven.
@@ -151,3 +158,4 @@ Level 7 claim.
 | Secrets rotate without restart | `internal/runtime/auth.go` | `SecretProvider`, `NewEnvironmentFileSecretProvider`, `Authenticate` | Credential references resolve on every request; bounded absolute mounted files may be atomically replaced. |
 | Operational metrics are bounded | `internal/metrics/metrics.go` | `Registry`, `WrapBroker`, `WritePrometheus` | Finite HTTP/event/routing labels plus persisted Run-state gauges avoid Run/Agent/path cardinality. |
 | Mixed-version rolling upgrades are tested | `.github/workflows/ci.yml`, `scripts/rolling-upgrade-test.sh` | `compatibility` job | Schema-016 and current binaries cross API/Worker roles in both directions on shared PostgreSQL, Redis, and NATS. |
+| Dependency failure and load are exercised | `.github/workflows/ci.yml`, `scripts/dependency-resilience-test.sh`, `internal/integration/process_replicas_test.go` | `resilience` job, `TestSeparateProcessesSustainConcurrentLoadWithoutDuplicateAttempts` | A stalled database and stopped Redis/NATS drive bounded unready/recovery behavior; 120 concurrent Runs produce exactly 120 starts across two worker processes. |
