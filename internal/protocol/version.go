@@ -10,9 +10,11 @@ import (
 )
 
 const (
-	Version1               = "1"
-	HeaderVersion          = "Agent-Protocol-Version"
-	CodeUnsupportedVersion = "unsupported_protocol_version"
+	Version1                = "1"
+	HeaderVersion           = "Agent-Protocol-Version"
+	HeaderEffectIdempotency = "Agent-Effect-Idempotency-Key"
+	CodeUnsupportedVersion  = "unsupported_protocol_version"
+	CodeEffectIdempotency   = "effect_idempotency_not_acknowledged"
 )
 
 var ErrUnsupportedVersion = errors.New("unsupported Agent Protocol version")

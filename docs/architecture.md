@@ -36,7 +36,7 @@ Runtime Resolver
 
 ## Agent Protocol V1
 
-`internal/protocol/v1` defines explicit JSON request, response, status, and structured error types for remote execution. The contract carries protocol version, Run and Agent identities, attempt, idempotency identity, input, output, status, and retryability. It is independent from the internal Go `Runtime` interface and is documented in [Agent Protocol V1](agent-protocol-v1.md), so non-Go Agents can implement it.
+`internal/protocol/v1` defines explicit JSON request, response, status, and structured error types for remote execution. The contract carries protocol version, Run and Agent identities, attempt, per-attempt and stable-effect idempotency identities, input, output, status, and retryability. It is independent from the internal Go `Runtime` interface and is documented in [Agent Protocol V1](agent-protocol-v1.md), so non-Go Agents can implement it.
 
 `internal/protocol` owns major-version compatibility independently from the V1
 wire schema. Unsupported versions produce a typed error and the stable
@@ -104,7 +104,7 @@ Lease renewal is conservative: if renewal fails or ownership is lost, the Engine
 
 Every successful lease acquisition also carries a monotonic fencing token. Redis allocates it atomically in the same Lua operation that creates the lease; Memory uses the same monotonic contract. After acquisition, the repository atomically claims the Run and advances its persisted `execution_fence` to at least that token. Every Engine state write must present the exact current fence. If a newer owner claims the Run, PostgreSQL or Memory rejects the old worker with `store.ErrStaleExecution`, including when the old runtime ignored cancellation or when independent coordinators temporarily admitted both workers. The fence is intentionally internal and is not exposed as Agent or client data.
 
-Fencing protects AgentMesh Run state, not arbitrary side effects already performed by an external Agent. Agent Protocol idempotency remains required for those effects. Redis persistence is enabled in Compose, but PostgreSQL's atomic claim still advances above its stored fence if a restored Redis sequence is lower.
+Fencing protects AgentMesh Run state, not arbitrary side effects already performed by an external Agent. The HTTP Runtime therefore sends an additive stable effect key on every attempt. Agents declaring `effect_idempotency: "required"` must echo it, while legacy definitions remain compatible. The remote Agent still owns atomic deduplication of its effect; see [External effect idempotency](external-effect-idempotency.md). Redis persistence is enabled in Compose, but PostgreSQL's atomic claim still advances above its stored fence if a restored Redis sequence is lower.
 
 At startup, queued Runs are republished with their Run ID as the JetStream deduplication key. A running Run is never reset globally: the recovering Engine first attempts to acquire that Run's execution lease. A healthy owner keeps renewing the lease, so another replica skips its Run. After a crashed owner's lease expires, one recovering replica acquires ownership, atomically advances the persisted execution fence, resets the Run to `queued`, releases the recovery lease, and republishes work. A stale owner can no longer finalize after recovery. The operation is idempotent; competing recovery instances either fail lease acquisition or observe that the Run is no longer `running`.
 
@@ -128,7 +128,7 @@ SSE frames expose the stable event identity through the standard `id:` field and
 
 Run submission is idempotent when clients send `Idempotency-Key`. PostgreSQL enforces uniqueness, so concurrent duplicate requests return the same run. JetStream delivery is at least once; state-transition validation and run IDs make duplicate delivery safe at the control-plane boundary.
 
-The current demo executor is deterministic. Side-effecting future executors must independently make their external actions idempotent because no queue can make an arbitrary external side effect exactly once.
+The current demo executor is deterministic. For remote side effects, the attempt key changes on retry while `effect_idempotency_key` remains stable for the Run. Strict Agents must acknowledge it, and the reference integration test proves one effect through a simulated post-commit `500`. The external service must still implement the atomic deduplication because no queue or acknowledgement can inspect or reverse an arbitrary remote effect.
 
 ## Basic observability
 

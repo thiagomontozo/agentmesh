@@ -12,19 +12,20 @@ import (
 
 func TestRunRequestJSONRoundTrip(t *testing.T) {
 	request := protocolv1.RunRequest{
-		ProtocolVersion: protocolv1.Version,
-		RunID:           "run_123",
-		AgentID:         "agent_456",
-		Attempt:         1,
-		IdempotencyKey:  protocolv1.AttemptIdempotencyKey("run_123", 1),
-		Input:           "Analyze this document",
+		ProtocolVersion:      protocolv1.Version,
+		RunID:                "run_123",
+		AgentID:              "agent_456",
+		Attempt:              1,
+		IdempotencyKey:       protocolv1.AttemptIdempotencyKey("run_123", 1),
+		EffectIdempotencyKey: protocolv1.EffectIdempotencyKey("run_123"),
+		Input:                "Analyze this document",
 	}
 
 	payload, err := json.Marshal(request)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `{"protocol_version":"1","run_id":"run_123","agent_id":"agent_456","attempt":1,"idempotency_key":"run_123:1","input":"Analyze this document"}`
+	want := `{"protocol_version":"1","run_id":"run_123","agent_id":"agent_456","attempt":1,"idempotency_key":"run_123:1","effect_idempotency_key":"run_123","input":"Analyze this document"}`
 	if string(payload) != want {
 		t.Fatalf("unexpected JSON:\nwant %s\n got %s", want, payload)
 	}
@@ -134,5 +135,18 @@ func TestAttemptIdempotencyKeyIsStablePerAttempt(t *testing.T) {
 	}
 	if protocolv1.AttemptIdempotencyKey("run_123", 2) == protocolv1.AttemptIdempotencyKey("run_123", 3) {
 		t.Fatal("different attempts must have different keys")
+	}
+}
+
+func TestEffectIdempotencyKeyIsStableAcrossAttempts(t *testing.T) {
+	stable := protocolv1.EffectIdempotencyKey("run_123")
+	if stable == "" || stable != protocolv1.EffectIdempotencyKey("run_123") {
+		t.Fatalf("expected stable effect key, got %q", stable)
+	}
+	if stable == protocolv1.EffectIdempotencyKey("run_other") {
+		t.Fatal("different Runs must have different effect keys")
+	}
+	if protocolv1.AttemptIdempotencyKey("run_123", 1) == protocolv1.AttemptIdempotencyKey("run_123", 2) {
+		t.Fatal("attempt keys must remain distinct")
 	}
 }

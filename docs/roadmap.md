@@ -59,6 +59,7 @@
 - [x] Policy-controlled HTTP Runtime security and SSRF hardening
 - [x] Outbound Agent Bearer/API-key authentication abstraction
 - [x] Formal Agent Protocol version compatibility and unsupported-version errors
+- [x] Opt-in stable effect idempotency across external Agent retries
 - [x] Evidence-based architectural reassessment after runtime, routing, Workflow, and distributed increments
 - [x] Independent API/Worker process roles and crash/restart acceptance test
 - [x] Cross-replica Run cancellation with event signaling and persistence fallback

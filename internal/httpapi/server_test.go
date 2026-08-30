@@ -382,6 +382,7 @@ func TestCreateAgentWithExecutionMetadataAndList(t *testing.T) {
 		"protocol":"HTTP",
 		"endpoint":"http://legal-agent:9000",
 		"capabilities":["legal-search","legal-analysis","summarization"],
+		"effect_idempotency":"required",
 		"max_concurrency":8,
 		"priority":50
 	}`
@@ -405,11 +406,15 @@ func TestCreateAgentWithExecutionMetadataAndList(t *testing.T) {
 	if created.MaxConcurrency != 8 || created.Priority != 50 {
 		t.Fatalf("unexpected routing metadata: %+v", created)
 	}
+	if created.EffectIdempotency != domain.EffectIdempotencyRequired {
+		t.Fatalf("unexpected effect idempotency policy: %+v", created)
+	}
 
 	getRequest := httptest.NewRequest(http.MethodGet, "/api/v1/agents/"+created.ID, nil)
 	getResponse := httptest.NewRecorder()
 	server.Handler().ServeHTTP(getResponse, getRequest)
-	if getResponse.Code != http.StatusOK || !strings.Contains(getResponse.Body.String(), `"runtime":"remote"`) {
+	if getResponse.Code != http.StatusOK || !strings.Contains(getResponse.Body.String(), `"runtime":"remote"`) ||
+		!strings.Contains(getResponse.Body.String(), `"effect_idempotency":"required"`) {
 		t.Fatalf("unexpected get response: %d %s", getResponse.Code, getResponse.Body.String())
 	}
 

@@ -24,6 +24,7 @@ credentials in protocol errors or outputs.
   "agent_id": "agent_456",
   "attempt": 1,
   "idempotency_key": "run_123:1",
+  "effect_idempotency_key": "run_123",
   "input": "Analyze this document"
 }
 ```
@@ -35,6 +36,7 @@ credentials in protocol errors or outputs.
 | `agent_id` | string | yes | Definition selected for this Run. |
 | `attempt` | integer | yes | Current attempt, starting at 1. |
 | `idempotency_key` | string | yes | Stable identity for this attempt; AgentMesh uses `<run_id>:<attempt>`. |
+| `effect_idempotency_key` | string | no (sent by AgentMesh) | Stable identity for externally visible effects; reused by every attempt of the Run. |
 | `input` | string | yes | Opaque input for the Agent; an empty string is valid at protocol level. |
 
 ## Successful response
@@ -44,7 +46,8 @@ credentials in protocol errors or outputs.
   "protocol_version": "1",
   "run_id": "run_123",
   "status": "succeeded",
-  "output": "Analysis completed"
+  "output": "Analysis completed",
+  "effect_idempotency_key": "run_123"
 }
 ```
 
@@ -70,6 +73,7 @@ credentials in protocol errors or outputs.
 | `status` | string | yes | `succeeded` or `failed`. |
 | `output` | string | no | Agent output on success; omitted when empty and forbidden on failure. |
 | `error` | object | on failure | Structured failure; forbidden on success. |
+| `effect_idempotency_key` | string | for strict Agents | Echoes the request key to acknowledge the effect-deduplication contract. |
 | `error.code` | string | on failure | Stable machine-readable code chosen by the Agent. |
 | `error.message` | string | on failure | Human-readable diagnostic without secrets. |
 
@@ -97,9 +101,14 @@ Non-`200` responses should use the same structured `error` object when possible,
 
 ## Idempotency
 
-The pair `(run_id, attempt)` identifies one attempt and produces the stable `idempotency_key` `<run_id>:<attempt>`. A remote Agent should store or otherwise deduplicate completed side effects for a retention period appropriate to its workload and return the same outcome when it receives the same key again. A new AgentMesh retry attempt has a new attempt number and therefore a new key.
+V1 exposes two different identities:
 
-V1 does not promise exactly-once delivery. The remote Agent remains responsible for making its own side effects idempotent.
+- `(run_id, attempt)` produces `idempotency_key` `<run_id>:<attempt>`. It identifies one transport/execution attempt and changes when AgentMesh retries.
+- `effect_idempotency_key` identifies the logical Run effect and is reused unchanged by every retry. AgentMesh also sends it as `Agent-Effect-Idempotency-Key`.
+
+An Agent registered with `effect_idempotency: "required"` must atomically store or deduplicate its irreversible effect using `effect_idempotency_key`, then echo the key in every valid protocol response. A missing or different acknowledgement is a non-retryable protocol error. Legacy Agents may omit the response field.
+
+This is a cooperative at-most-once-effect contract, not a claim that AgentMesh can inspect an external database or guarantee global exactly-once delivery. The remote Agent owns the atomic relationship between its effect and its stored outcome, including a suitable retention policy. See [External effect idempotency](external-effect-idempotency.md).
 
 ## Interoperability example
 

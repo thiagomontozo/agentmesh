@@ -30,8 +30,9 @@ func TestAgentNormalizesExecutionMetadata(t *testing.T) {
 	agent := Agent{
 		ID: " agt_remote ", Name: " Legal Agent ", SystemPrompt: " Be precise ",
 		Runtime: " REMOTE ", Protocol: " HTTP ", Endpoint: " http://legal-agent:9000 ",
-		Capabilities:   []string{" legal-search ", "summarization"},
-		MaxConcurrency: 4, Priority: 25,
+		Capabilities:      []string{" legal-search ", "summarization"},
+		EffectIdempotency: " REQUIRED ",
+		MaxConcurrency:    4, Priority: 25,
 	}
 	if err := agent.NormalizeAndValidate(); err != nil {
 		t.Fatal(err)
@@ -47,6 +48,9 @@ func TestAgentNormalizesExecutionMetadata(t *testing.T) {
 	}
 	if agent.MaxConcurrency != 4 || agent.Priority != 25 {
 		t.Fatalf("unexpected routing metadata: %+v", agent)
+	}
+	if agent.EffectIdempotency != EffectIdempotencyRequired {
+		t.Fatalf("unexpected effect idempotency policy: %+v", agent)
 	}
 }
 
@@ -72,6 +76,8 @@ func TestAgentRejectsInvalidExecutionMetadata(t *testing.T) {
 		{name: "protocol without runtime", agent: Agent{ID: "agt_1", Name: "test", Protocol: "http"}},
 		{name: "endpoint without protocol", agent: Agent{ID: "agt_1", Name: "test", Runtime: "remote", Endpoint: "http://agent:9000"}},
 		{name: "relative endpoint", agent: Agent{ID: "agt_1", Name: "test", Runtime: "remote", Protocol: "http", Endpoint: "/v1/runs"}},
+		{name: "invalid effect idempotency", agent: Agent{ID: "agt_1", Name: "test", Runtime: "remote", Protocol: "http", EffectIdempotency: "best-effort"}},
+		{name: "effect idempotency without runtime", agent: Agent{ID: "agt_1", Name: "test", EffectIdempotency: EffectIdempotencyRequired}},
 		{name: "blank capability", agent: Agent{ID: "agt_1", Name: "test", Capabilities: []string{" "}}},
 		{name: "invalid capability", agent: Agent{ID: "agt_1", Name: "test", Capabilities: []string{"legal/search"}}},
 		{name: "negative max concurrency", agent: Agent{ID: "agt_1", Name: "test", MaxConcurrency: -1}},
