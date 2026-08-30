@@ -45,6 +45,8 @@ type Server struct {
 	auditMaxEvents       int
 	metrics              *metrics.Registry
 	tools                toolGateway
+	approvalTTL          time.Duration
+	approvalRetention    time.Duration
 }
 
 type workflowController interface {
@@ -56,6 +58,7 @@ type toolGateway interface {
 	Servers() []mcp.ServerView
 	ListTools(context.Context, string, string) (mcp.ListToolsResult, error)
 	CallTool(context.Context, string, string, map[string]any) (mcp.CallToolResult, error)
+	RequiresApproval(string, string) (bool, error)
 }
 
 func New(s store.Repository, e *engine.Engine, bus events.Broker) *Server {
@@ -68,6 +71,7 @@ func NewWithInstanceID(s store.Repository, e *engine.Engine, bus events.Broker, 
 		agentHealth:       agenthealth.Noop{},
 		agentCallMaxDepth: 8, agentCallMaxChildren: 16,
 		auditRetention: 90 * 24 * time.Hour, auditMaxEvents: 100000,
+		approvalTTL: 15 * time.Minute, approvalRetention: 30 * 24 * time.Hour,
 	}
 	server.discovery = discovery.New(s, server.agentHealth)
 	server.agentRouter = agentrouter.NewWithLoad(server.discovery, s)
@@ -110,6 +114,15 @@ func (s *Server) SetMetrics(registry *metrics.Registry) { s.metrics = registry }
 
 func (s *Server) SetToolGateway(gateway toolGateway) { s.tools = gateway }
 
+func (s *Server) SetApprovalPolicy(ttl, retention time.Duration) {
+	if ttl > 0 {
+		s.approvalTTL = ttl
+	}
+	if retention > 0 {
+		s.approvalRetention = retention
+	}
+}
+
 func (s *Server) Handler() http.Handler {
 	handler := http.Handler(recoverMiddleware(s.mux))
 	handler = s.auditMiddleware(handler)
@@ -148,6 +161,11 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/tools/servers", s.listToolServers)
 	s.mux.HandleFunc("GET /api/v1/tools", s.listTools)
 	s.mux.HandleFunc("POST /api/v1/tools/call", s.callTool)
+	s.mux.HandleFunc("POST /api/v1/approvals", s.createApproval)
+	s.mux.HandleFunc("GET /api/v1/approvals", s.listApprovals)
+	s.mux.HandleFunc("GET /api/v1/approvals/{id}", s.getApproval)
+	s.mux.HandleFunc("POST /api/v1/approvals/{id}/approve", s.approveApproval)
+	s.mux.HandleFunc("POST /api/v1/approvals/{id}/reject", s.rejectApproval)
 	s.mux.HandleFunc("GET /metrics", s.prometheusMetrics)
 }
 
@@ -178,9 +196,10 @@ func (s *Server) listTools(w http.ResponseWriter, r *http.Request) {
 }
 
 type callToolRequest struct {
-	ServerID  string         `json:"server_id"`
-	Name      string         `json:"name"`
-	Arguments map[string]any `json:"arguments"`
+	ServerID   string         `json:"server_id"`
+	Name       string         `json:"name"`
+	Arguments  map[string]any `json:"arguments"`
+	ApprovalID string         `json:"approval_id,omitempty"`
 }
 
 func (s *Server) callTool(w http.ResponseWriter, r *http.Request) {
@@ -197,12 +216,166 @@ func (s *Server) callTool(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "server_id and name are required")
 		return
 	}
+	requiresApproval, err := s.tools.RequiresApproval(request.ServerID, request.Name)
+	if err != nil {
+		s.writeToolError(w, err)
+		return
+	}
+	if requiresApproval && strings.TrimSpace(request.ApprovalID) == "" {
+		writeError(w, http.StatusPreconditionRequired, "approved approval_id is required for this tool")
+		return
+	}
+	if strings.TrimSpace(request.ApprovalID) != "" {
+		arguments, marshalErr := canonicalToolArguments(request.Arguments)
+		if marshalErr != nil {
+			writeError(w, http.StatusBadRequest, marshalErr.Error())
+			return
+		}
+		_, err = s.store.ConsumeApproval(r.Context(), strings.TrimSpace(request.ApprovalID), request.ServerID, request.Name,
+			domain.ApprovalArgumentsHash(request.ServerID, request.Name, arguments), time.Now())
+		if err != nil {
+			s.writeApprovalError(w, err)
+			return
+		}
+	}
 	result, err := s.tools.CallTool(r.Context(), request.ServerID, request.Name, request.Arguments)
 	if err != nil {
 		s.writeToolError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+type createApprovalRequest struct {
+	ServerID  string         `json:"server_id"`
+	ToolName  string         `json:"tool_name"`
+	Arguments map[string]any `json:"arguments"`
+	Reason    string         `json:"reason,omitempty"`
+}
+
+func (s *Server) createApproval(w http.ResponseWriter, r *http.Request) {
+	if s.tools == nil {
+		writeError(w, http.StatusServiceUnavailable, "MCP tool gateway is unavailable")
+		return
+	}
+	var request createApprovalRequest
+	if err := decodeJSON(r, &request); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	request.ServerID = strings.TrimSpace(request.ServerID)
+	request.ToolName = strings.TrimSpace(request.ToolName)
+	required, err := s.tools.RequiresApproval(request.ServerID, request.ToolName)
+	if err != nil {
+		s.writeToolError(w, err)
+		return
+	}
+	if !required {
+		writeError(w, http.StatusBadRequest, "tool does not require approval")
+		return
+	}
+	arguments, err := canonicalToolArguments(request.Arguments)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	approval := domain.Approval{ID: newID("apr"), ServerID: request.ServerID, ToolName: request.ToolName,
+		Arguments: arguments, Reason: strings.TrimSpace(request.Reason), RequestedBy: approvalActor(r.Context())}
+	if err := approval.Initialize(time.Now(), s.approvalTTL); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	created, err := s.store.CreateApproval(r.Context(), approval, s.approvalRetention)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not create approval")
+		return
+	}
+	writeJSON(w, http.StatusCreated, created)
+}
+
+func (s *Server) listApprovals(w http.ResponseWriter, r *http.Request) {
+	status := domain.ApprovalStatus(strings.TrimSpace(r.URL.Query().Get("status")))
+	if status != "" && status != domain.ApprovalPending && status != domain.ApprovalApproved && status != domain.ApprovalRejected && status != domain.ApprovalConsumed {
+		writeError(w, http.StatusBadRequest, "invalid approval status")
+		return
+	}
+	limit := 100
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 1 || parsed > 200 {
+			writeError(w, http.StatusBadRequest, "limit must be between 1 and 200")
+			return
+		}
+		limit = parsed
+	}
+	approvals, err := s.store.ListApprovals(r.Context(), status, limit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not list approvals")
+		return
+	}
+	writeJSON(w, http.StatusOK, approvals)
+}
+
+func (s *Server) getApproval(w http.ResponseWriter, r *http.Request) {
+	approval, err := s.store.GetApproval(r.Context(), r.PathValue("id"))
+	if errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "approval not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load approval")
+		return
+	}
+	writeJSON(w, http.StatusOK, approval)
+}
+
+func (s *Server) approveApproval(w http.ResponseWriter, r *http.Request) {
+	s.decideApproval(w, r, true)
+}
+func (s *Server) rejectApproval(w http.ResponseWriter, r *http.Request) {
+	s.decideApproval(w, r, false)
+}
+
+func (s *Server) decideApproval(w http.ResponseWriter, r *http.Request, approve bool) {
+	approval, err := s.store.DecideApproval(r.Context(), r.PathValue("id"), approve, approvalActor(r.Context()), time.Now())
+	if err != nil {
+		s.writeApprovalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, approval)
+}
+
+func (s *Server) writeApprovalError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		writeError(w, http.StatusNotFound, "approval not found")
+	case errors.Is(err, store.ErrApprovalExpired):
+		writeError(w, http.StatusGone, "approval expired")
+	case errors.Is(err, store.ErrApprovalMismatch):
+		writeError(w, http.StatusConflict, "approval does not match tool call")
+	case errors.Is(err, store.ErrApprovalNotPending), errors.Is(err, store.ErrApprovalNotApproved):
+		writeError(w, http.StatusConflict, err.Error())
+	default:
+		writeError(w, http.StatusInternalServerError, "approval operation failed")
+	}
+}
+
+func canonicalToolArguments(arguments map[string]any) ([]byte, error) {
+	if arguments == nil {
+		arguments = map[string]any{}
+	}
+	encoded, err := json.Marshal(arguments)
+	if err != nil {
+		return nil, fmt.Errorf("arguments must be valid JSON: %w", err)
+	}
+	return encoded, nil
+}
+
+func approvalActor(ctx context.Context) string {
+	if identity, ok := apiauth.FromContext(ctx); ok && strings.TrimSpace(identity.Subject) != "" {
+		return identity.Subject
+	}
+	return "anonymous"
 }
 
 func (s *Server) writeToolError(w http.ResponseWriter, err error) {

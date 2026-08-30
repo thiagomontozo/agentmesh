@@ -18,6 +18,7 @@ export AGENTMESH_MCP_SERVERS='[
     "endpoint":"https://tools.example.com/mcp",
     "allowed_tools":["search","fetch"],
     "denied_tools":["delete"],
+	"approval_required_tools":["fetch"],
     "timeout":"5s"
   }
 ]'
@@ -29,6 +30,9 @@ invalid endpoints, non-positive timeouts, unknown configuration fields, and
 malformed policies prevent startup. `denied_tools` always wins; a non-empty
 `allowed_tools` list is an allowlist, while an empty list permits all tools not
 explicitly denied.
+
+Tools listed in `approval_required_tools` require a persisted, single-use
+approval bound to their exact arguments. See [Human approval gates](human-approvals.md).
 
 `AGENTMESH_MCP_DEFAULT_TIMEOUT` defaults to `10s`. Per-server timeout overrides
 are enforced with `context.WithTimeout`; request and response sizes reuse the
@@ -52,6 +56,9 @@ Call body:
   "arguments": {"q": "AgentMesh"}
 }
 ```
+
+For a protected tool, include `"approval_id":"apr_..."` after completing the
+approval lifecycle.
 
 Discovery sends `tools/list`, preserves pagination/cache metadata, validates
 tool names, and removes tools denied by local policy. Invocation sends

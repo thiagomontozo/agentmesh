@@ -20,23 +20,34 @@ var (
 )
 
 type Server struct {
-	ID           string        `json:"id"`
-	Endpoint     string        `json:"endpoint"`
-	AllowedTools []string      `json:"allowed_tools,omitempty"`
-	DeniedTools  []string      `json:"denied_tools,omitempty"`
-	Timeout      time.Duration `json:"-"`
+	ID                    string        `json:"id"`
+	Endpoint              string        `json:"endpoint"`
+	AllowedTools          []string      `json:"allowed_tools,omitempty"`
+	DeniedTools           []string      `json:"denied_tools,omitempty"`
+	ApprovalRequiredTools []string      `json:"approval_required_tools,omitempty"`
+	Timeout               time.Duration `json:"-"`
 }
 
 type ServerView struct {
-	ID           string   `json:"id"`
-	Endpoint     string   `json:"endpoint"`
-	AllowedTools []string `json:"allowed_tools,omitempty"`
-	DeniedTools  []string `json:"denied_tools,omitempty"`
-	TimeoutMS    int64    `json:"timeout_ms"`
+	ID                    string   `json:"id"`
+	Endpoint              string   `json:"endpoint"`
+	AllowedTools          []string `json:"allowed_tools,omitempty"`
+	DeniedTools           []string `json:"denied_tools,omitempty"`
+	ApprovalRequiredTools []string `json:"approval_required_tools,omitempty"`
+	TimeoutMS             int64    `json:"timeout_ms"`
 }
 
 func (s Server) View() ServerView {
-	return ServerView{ID: s.ID, Endpoint: s.Endpoint, AllowedTools: append([]string(nil), s.AllowedTools...), DeniedTools: append([]string(nil), s.DeniedTools...), TimeoutMS: s.Timeout.Milliseconds()}
+	return ServerView{ID: s.ID, Endpoint: s.Endpoint, AllowedTools: append([]string(nil), s.AllowedTools...), DeniedTools: append([]string(nil), s.DeniedTools...), ApprovalRequiredTools: append([]string(nil), s.ApprovalRequiredTools...), TimeoutMS: s.Timeout.Milliseconds()}
+}
+
+func (s Server) RequiresApproval(tool string) bool {
+	for _, required := range s.ApprovalRequiredTools {
+		if required == tool {
+			return true
+		}
+	}
+	return false
 }
 
 func (s Server) Allows(tool string) bool {
@@ -102,11 +113,12 @@ func (r *Registry) List() []ServerView {
 }
 
 type serverConfig struct {
-	ID           string   `json:"id"`
-	Endpoint     string   `json:"endpoint"`
-	AllowedTools []string `json:"allowed_tools"`
-	DeniedTools  []string `json:"denied_tools"`
-	Timeout      string   `json:"timeout"`
+	ID                    string   `json:"id"`
+	Endpoint              string   `json:"endpoint"`
+	AllowedTools          []string `json:"allowed_tools"`
+	DeniedTools           []string `json:"denied_tools"`
+	ApprovalRequiredTools []string `json:"approval_required_tools"`
+	Timeout               string   `json:"timeout"`
 }
 
 func ParseRegistry(raw string, defaultTimeout time.Duration) (*Registry, error) {
@@ -132,7 +144,7 @@ func ParseRegistry(raw string, defaultTimeout time.Duration) (*Registry, error) 
 			}
 			timeout = parsed
 		}
-		if err := registry.Register(Server{ID: config.ID, Endpoint: config.Endpoint, AllowedTools: config.AllowedTools, DeniedTools: config.DeniedTools, Timeout: timeout}); err != nil {
+		if err := registry.Register(Server{ID: config.ID, Endpoint: config.Endpoint, AllowedTools: config.AllowedTools, DeniedTools: config.DeniedTools, ApprovalRequiredTools: config.ApprovalRequiredTools, Timeout: timeout}); err != nil {
 			return nil, err
 		}
 	}
@@ -158,6 +170,10 @@ func validateServer(server *Server) error {
 		return policyErr
 	}
 	server.DeniedTools, policyErr = normalizeToolNames(server.DeniedTools)
+	if policyErr != nil {
+		return policyErr
+	}
+	server.ApprovalRequiredTools, policyErr = normalizeToolNames(server.ApprovalRequiredTools)
 	return policyErr
 }
 

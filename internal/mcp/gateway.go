@@ -16,6 +16,17 @@ func NewGateway(registry *Registry, client *Client) *Gateway {
 
 func (g *Gateway) Servers() []ServerView { return g.registry.List() }
 
+func (g *Gateway) RequiresApproval(serverID, name string) (bool, error) {
+	server, err := g.registry.Get(serverID)
+	if err != nil {
+		return false, err
+	}
+	if !validName(name) || !server.Allows(name) {
+		return false, ErrToolDenied
+	}
+	return server.RequiresApproval(name), nil
+}
+
 func (g *Gateway) ListTools(ctx context.Context, serverID, cursor string) (ListToolsResult, error) {
 	server, err := g.registry.Get(serverID)
 	if err != nil {

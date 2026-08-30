@@ -68,6 +68,8 @@ boundary are documented in [Rolling-upgrade compatibility](compatibility.md).
 | `AGENTMESH_REDIS_URL` | none | Required in distributed mode |
 | `AGENTMESH_MCP_SERVERS` | none | JSON array of stateless Streamable HTTP MCP servers and per-server tool policy |
 | `AGENTMESH_MCP_DEFAULT_TIMEOUT` | `10s` | Positive default deadline for MCP discovery and calls |
+| `AGENTMESH_APPROVAL_TTL` | `15m` | Positive lifetime of a pending/approved MCP tool approval |
+| `AGENTMESH_APPROVAL_RETENTION` | `720h` | Positive retention window for expired approval history |
 
 ## Remote HTTP Agents
 
@@ -100,6 +102,9 @@ request-time credential resolver as the remote HTTP Runtime. See
 calls use the current stateless Streamable HTTP request format, the existing
 outbound network/authentication controls, deterministic allow/deny policy, and
 per-server deadlines. See [MCP tool gateway](mcp-tools.md).
+
+Per-server `approval_required_tools` adds an atomic persisted approval gate
+before selected effects. See [Human approval gates](human-approvals.md).
 
 `AGENTMESH_API_AUTH_CONFIG` enables inbound Bearer authentication and RBAC using
 environment-variable token references. Empty preserves the legacy unauthenticated

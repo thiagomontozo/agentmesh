@@ -8,7 +8,7 @@ import (
 
 func TestParseRegistryNormalizesPoliciesAndOrdersServers(t *testing.T) {
 	registry, err := ParseRegistry(`[
-		{"id":"search","endpoint":"https://search.example/mcp","allowed_tools":["query","query"],"denied_tools":["delete"],"timeout":"2s"},
+		{"id":"search","endpoint":"https://search.example/mcp","allowed_tools":["query","query"],"denied_tools":["delete"],"approval_required_tools":["query","query"],"timeout":"2s"},
 		{"id":"code","endpoint":"http://code.internal/mcp"}
 	]`, 5*time.Second)
 	if err != nil {
@@ -24,6 +24,9 @@ func TestParseRegistryNormalizesPoliciesAndOrdersServers(t *testing.T) {
 	}
 	if !search.Allows("query") || search.Allows("other") || search.Allows("delete") || len(search.AllowedTools) != 1 {
 		t.Fatalf("unexpected policy: %+v", search)
+	}
+	if !search.RequiresApproval("query") || search.RequiresApproval("other") || len(search.ApprovalRequiredTools) != 1 {
+		t.Fatalf("unexpected approval policy: %+v", search)
 	}
 }
 

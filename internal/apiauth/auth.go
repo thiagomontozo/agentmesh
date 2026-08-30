@@ -153,6 +153,10 @@ func (a *Authenticator) authenticate(header string) (Identity, bool) {
 }
 
 func authorized(identity Identity, r *http.Request) bool {
+	if r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/api/v1/approvals/") &&
+		(strings.HasSuffix(r.URL.Path, "/approve") || strings.HasSuffix(r.URL.Path, "/reject")) {
+		return identity.HasAny(RoleAdmin)
+	}
 	if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/children") {
 		return identity.HasAny(RoleAgent)
 	}

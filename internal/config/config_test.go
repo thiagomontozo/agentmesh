@@ -42,6 +42,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.MCPServersConfig != "" || cfg.MCPDefaultTimeout != 10*time.Second {
 		t.Fatalf("unexpected MCP defaults: %+v", cfg)
 	}
+	if cfg.ApprovalTTL != 15*time.Minute || cfg.ApprovalRetention != 30*24*time.Hour {
+		t.Fatalf("unexpected approval defaults: %+v", cfg)
+	}
 }
 
 func TestLoadRejectsInvalidValues(t *testing.T) {
@@ -83,6 +86,8 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 		{name: "audit retention is zero", key: "AGENTMESH_AUDIT_RETENTION", value: "0s"},
 		{name: "audit max is zero", key: "AGENTMESH_AUDIT_MAX_EVENTS", value: "0"},
 		{name: "MCP timeout is zero", key: "AGENTMESH_MCP_DEFAULT_TIMEOUT", value: "0s"},
+		{name: "approval TTL is zero", key: "AGENTMESH_APPROVAL_TTL", value: "0s"},
+		{name: "approval retention is zero", key: "AGENTMESH_APPROVAL_RETENTION", value: "0s"},
 	}
 
 	for _, test := range tests {
@@ -182,6 +187,8 @@ func clearEnvironment(t *testing.T) {
 		"AGENTMESH_METRICS_ADDR",
 		"AGENTMESH_MCP_SERVERS",
 		"AGENTMESH_MCP_DEFAULT_TIMEOUT",
+		"AGENTMESH_APPROVAL_TTL",
+		"AGENTMESH_APPROVAL_RETENTION",
 	} {
 		t.Setenv(key, "")
 	}

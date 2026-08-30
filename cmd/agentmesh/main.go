@@ -197,6 +197,7 @@ func main() {
 		api.SetAPISecurity(apiAuthenticator, cfg.AuditRetention, cfg.AuditMaxEvents)
 		api.SetMetrics(metricsRegistry)
 		api.SetToolGateway(mcpGateway)
+		api.SetApprovalPolicy(cfg.ApprovalTTL, cfg.ApprovalRetention)
 		api.SetAgentHealth(healthService)
 		api.SetWorkflowController(workflowManager)
 		api.SetAgentCallLimits(cfg.AgentCallMaxDepth, cfg.AgentCallMaxChildren)

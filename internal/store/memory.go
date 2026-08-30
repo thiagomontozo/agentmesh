@@ -23,6 +23,110 @@ type Memory struct {
 	workflows       map[string]domain.Workflow
 	workflowEvents  map[string][]domain.WorkflowEvent
 	auditEvents     []domain.AuditEvent
+	approvals       map[string]domain.Approval
+}
+
+func (m *Memory) CreateApproval(_ context.Context, approval domain.Approval, retention time.Duration) (domain.Approval, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, exists := m.approvals[approval.ID]; exists {
+		return domain.Approval{}, ErrConflict
+	}
+	if retention > 0 {
+		cutoff := time.Now().UTC().Add(-retention)
+		for id, existing := range m.approvals {
+			if existing.ExpiresAt.Before(cutoff) {
+				delete(m.approvals, id)
+			}
+		}
+	}
+	m.approvals[approval.ID] = cloneApproval(approval)
+	return cloneApproval(approval), nil
+}
+
+func (m *Memory) GetApproval(_ context.Context, id string) (domain.Approval, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	approval, exists := m.approvals[id]
+	if !exists {
+		return domain.Approval{}, ErrNotFound
+	}
+	return cloneApproval(approval), nil
+}
+
+func (m *Memory) ListApprovals(_ context.Context, status domain.ApprovalStatus, limit int) ([]domain.Approval, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	result := make([]domain.Approval, 0, len(m.approvals))
+	for _, approval := range m.approvals {
+		if status == "" || approval.Status == status {
+			result = append(result, cloneApproval(approval))
+		}
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].CreatedAt.Equal(result[j].CreatedAt) {
+			return result[i].ID < result[j].ID
+		}
+		return result[i].CreatedAt.After(result[j].CreatedAt)
+	})
+	if limit > 0 && len(result) > limit {
+		result = result[:limit]
+	}
+	return result, nil
+}
+
+func (m *Memory) DecideApproval(_ context.Context, id string, approve bool, actor string, now time.Time) (domain.Approval, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	approval, exists := m.approvals[id]
+	if !exists {
+		return domain.Approval{}, ErrNotFound
+	}
+	now = now.UTC()
+	if approval.Expired(now) {
+		return domain.Approval{}, ErrApprovalExpired
+	}
+	if approval.Status != domain.ApprovalPending {
+		return domain.Approval{}, ErrApprovalNotPending
+	}
+	approval.Status = domain.ApprovalRejected
+	if approve {
+		approval.Status = domain.ApprovalApproved
+	}
+	approval.DecidedBy = actor
+	approval.DecidedAt = &now
+	approval.Version++
+	m.approvals[id] = approval
+	return cloneApproval(approval), nil
+}
+
+func (m *Memory) ConsumeApproval(_ context.Context, id, serverID, toolName, argumentsHash string, now time.Time) (domain.Approval, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	approval, exists := m.approvals[id]
+	if !exists {
+		return domain.Approval{}, ErrNotFound
+	}
+	if approval.ServerID != serverID || approval.ToolName != toolName || approval.ArgumentsHash != argumentsHash {
+		return domain.Approval{}, ErrApprovalMismatch
+	}
+	now = now.UTC()
+	if approval.Expired(now) {
+		return domain.Approval{}, ErrApprovalExpired
+	}
+	if approval.Status != domain.ApprovalApproved {
+		return domain.Approval{}, ErrApprovalNotApproved
+	}
+	approval.Status = domain.ApprovalConsumed
+	approval.ConsumedAt = &now
+	approval.Version++
+	m.approvals[id] = approval
+	return cloneApproval(approval), nil
+}
+
+func cloneApproval(approval domain.Approval) domain.Approval {
+	approval.Arguments = append([]byte(nil), approval.Arguments...)
+	return approval
 }
 
 func (m *Memory) AppendAuditEvent(_ context.Context, event domain.AuditEvent, retention time.Duration, maxEvents int) error {
@@ -72,6 +176,7 @@ func NewMemory() *Memory {
 		idempotencyKeys: make(map[string]string),
 		workflows:       make(map[string]domain.Workflow),
 		workflowEvents:  make(map[string][]domain.WorkflowEvent),
+		approvals:       make(map[string]domain.Approval),
 	}
 }
 
