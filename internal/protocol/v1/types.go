@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+
+	"github.com/thiagomontozo/agentmesh/internal/protocol"
 )
 
-const Version = "1"
+const Version = protocol.Version1
 
 var ErrInvalidMessage = errors.New("invalid agent protocol v1 message")
 
@@ -30,8 +32,8 @@ type RunRequest struct {
 }
 
 func (r RunRequest) Validate() error {
-	if r.ProtocolVersion != Version {
-		return invalidMessage("unsupported protocol_version %q", r.ProtocolVersion)
+	if err := protocol.ValidateVersion(r.ProtocolVersion); err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalidMessage, err)
 	}
 	if strings.TrimSpace(r.RunID) == "" {
 		return invalidMessage("run_id is required")
@@ -64,8 +66,8 @@ type RunResponse struct {
 }
 
 func (r RunResponse) Validate() error {
-	if r.ProtocolVersion != Version {
-		return invalidMessage("unsupported protocol_version %q", r.ProtocolVersion)
+	if err := protocol.ValidateVersion(r.ProtocolVersion); err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalidMessage, err)
 	}
 	if strings.TrimSpace(r.RunID) == "" {
 		return invalidMessage("run_id is required")
@@ -89,6 +91,20 @@ func (r RunResponse) Validate() error {
 		return invalidMessage("unsupported status %q", r.Status)
 	}
 	return nil
+}
+
+// UnsupportedVersionResponse is the controlled V1 error an Agent can return
+// with HTTP 400 when it cannot process the request's protocol_version.
+func UnsupportedVersionResponse(runID string) RunResponse {
+	return RunResponse{
+		ProtocolVersion: Version,
+		RunID:           runID,
+		Status:          StatusFailed,
+		Error: &RunError{
+			Code:    protocol.CodeUnsupportedVersion,
+			Message: "unsupported protocol version; supported versions: " + strings.Join(protocol.SupportedVersions(), ", "),
+		},
+	}
 }
 
 type RunError struct {

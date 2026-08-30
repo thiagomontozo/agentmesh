@@ -38,6 +38,12 @@ Runtime Resolver
 
 `internal/protocol/v1` defines explicit JSON request, response, status, and structured error types for remote execution. The contract carries protocol version, Run and Agent identities, attempt, idempotency identity, input, output, status, and retryability. It is independent from the internal Go `Runtime` interface and is documented in [Agent Protocol V1](agent-protocol-v1.md), so non-Go Agents can implement it.
 
+`internal/protocol` owns major-version compatibility independently from the V1
+wire schema. Unsupported versions produce a typed error and the stable
+`unsupported_protocol_version` code. A future V2 remains a separate schema and
+adapter rather than changing Engine contracts. See
+[Agent Protocol versioning](protocol-versioning.md).
+
 `runtime.HTTPRuntime` maps the internal execution request to Agent Protocol V1 and posts it to the registered Agent endpoint. It accepts `runtime: "remote"` with `protocol: "http"`; the endpoint is a base URL and `/v1/runs` is appended. Redirects are not followed, response bodies are bounded, and protocol responses are validated before their output is accepted.
 
 The production constructor wraps `http.Transport` with a configurable network

@@ -58,6 +58,7 @@
 - [x] API/Worker process separation architectural analysis (no implementation)
 - [x] Policy-controlled HTTP Runtime security and SSRF hardening
 - [x] Outbound Agent Bearer/API-key authentication abstraction
+- [x] Formal Agent Protocol version compatibility and unsupported-version errors
 - [ ] Inbound API authentication
 - [ ] RBAC
 - [ ] Audit log

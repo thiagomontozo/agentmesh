@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/thiagomontozo/agentmesh/internal/protocol"
 	protocolv1 "github.com/thiagomontozo/agentmesh/internal/protocol/v1"
 )
 
@@ -195,6 +196,7 @@ func (h *HTTPRuntime) Execute(ctx context.Context, request ExecutionRequest) (Ex
 	httpRequest.Header.Set("Accept", "application/json")
 	httpRequest.Header.Set("Accept-Encoding", "identity")
 	httpRequest.Header.Set("Idempotency-Key", wireRequest.IdempotencyKey)
+	httpRequest.Header.Set(protocol.HeaderVersion, protocolv1.Version)
 	if err := h.authenticator.Authenticate(ctx, request.Agent, httpRequest); err != nil {
 		return ExecutionResult{}, &HTTPError{Kind: HTTPErrorPermanent, Err: ErrAuthentication}
 	}
@@ -231,7 +233,11 @@ func (h *HTTPRuntime) Execute(ctx context.Context, request ExecutionRequest) (Ex
 		return ExecutionResult{}, protocolError("decode response: %v", err)
 	}
 	if err := wireResponse.Validate(); err != nil {
-		return ExecutionResult{}, &HTTPError{Kind: HTTPErrorProtocol, Err: err}
+		code := ""
+		if errors.Is(err, protocol.ErrUnsupportedVersion) {
+			code = protocol.CodeUnsupportedVersion
+		}
+		return ExecutionResult{}, &HTTPError{Kind: HTTPErrorProtocol, Code: code, Err: err}
 	}
 	if wireResponse.RunID != request.RunID {
 		return ExecutionResult{}, protocolError("response run_id %q does not match request", wireResponse.RunID)
