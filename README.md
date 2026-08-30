@@ -60,6 +60,7 @@ The Engine resolves the already-selected Agent's runtime through a concurrency-s
 - Agent registration and lookup
 - Remote HTTP Agent execution through Agent Protocol V1
 - Vendor-neutral LLM provider interface and OpenAI-compatible runtime
+- MCP 2026-07-28 Streamable HTTP tool registry, policy, timeout, discovery, and calls
 - Policy-controlled HTTP Runtime with dial-time SSRF checks and bounded, uncompressed payloads
 - Per-Agent Bearer/API-key request authentication through non-persisted secret references
 - Request-time environment/mounted-file secret resolution with rotation support
@@ -125,6 +126,9 @@ The Engine resolves the already-selected Agent's runtime through a concurrency-s
 | `PUT` | `/api/v1/agents/{id}` | Replace an Agent definition using `If-Match` |
 | `DELETE` | `/api/v1/agents/{id}` | Delete an unused Agent using `If-Match` |
 | `GET` | `/api/v1/agents/{id}/health` | Get derived Agent health and schedule refresh |
+| `GET` | `/api/v1/tools/servers` | List configured MCP servers and effective policies |
+| `GET` | `/api/v1/tools` | Discover allowed tools from one MCP server |
+| `POST` | `/api/v1/tools/call` | Invoke an allowed MCP tool with a bounded deadline |
 | `POST` | `/api/v1/runs` | Submit a Run by explicit Agent ID or required capabilities |
 | `GET` | `/api/v1/runs` | List runs |
 | `GET` | `/api/v1/runs/{id}` | Get run status/result |
@@ -279,6 +283,7 @@ docs/                   roadmap and architecture notes
 - [HTTP Runtime security](docs/http-runtime-security.md)
 - [Agent request authentication](docs/agent-authentication.md)
 - [LLM providers](docs/llm-providers.md)
+- [MCP tool gateway](docs/mcp-tools.md)
 - [Agent Protocol versioning](docs/protocol-versioning.md)
 - [Architectural reassessment](docs/architectural-reassessment.md)
 - [Configuration and operations](docs/configuration.md)

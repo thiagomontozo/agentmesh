@@ -76,6 +76,14 @@ supports an OpenAI-compatible Chat Completions provider. Provider HTTP calls
 reuse the remote Runtime's secure client policy, outbound credential resolver,
 attempt context, and response bounds; Engine remains provider-agnostic.
 
+`internal/mcp` is a separate control-plane tool gateway. Its startup registry
+contains only non-secret Streamable HTTP endpoints, case-sensitive allow/deny
+policies, and bounded deadlines. The client emits MCP `2026-07-28` stateless
+JSON-RPC metadata/routing headers for `tools/list` and `tools/call`, reuses the
+secure outbound HTTP/authentication boundary, filters discovery by policy, and
+exposes controlled API operations. It is not embedded in Engine or Workflow,
+so tool calls cannot bypass normal API RBAC and audit middleware.
+
 ## Run cancellation
 
 `POST /api/v1/runs/{id}/cancel` atomically moves a queued or running Run to `canceled`. The Engine keeps cancel functions only for active executions in its own process, so local runtime contexts—including outbound HTTP requests—are interrupted immediately and retry backoff stops. Queued messages are not removed from the queue; consumers acknowledge them without execution after observing the terminal state.

@@ -39,6 +39,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.MetricsAddr != "" {
 		t.Fatalf("metrics-only listener must be opt-in, got %q", cfg.MetricsAddr)
 	}
+	if cfg.MCPServersConfig != "" || cfg.MCPDefaultTimeout != 10*time.Second {
+		t.Fatalf("unexpected MCP defaults: %+v", cfg)
+	}
 }
 
 func TestLoadRejectsInvalidValues(t *testing.T) {
@@ -79,6 +82,7 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 		{name: "HTTP blocked CIDR is invalid", key: "AGENTMESH_HTTP_BLOCKED_CIDRS", value: "private"},
 		{name: "audit retention is zero", key: "AGENTMESH_AUDIT_RETENTION", value: "0s"},
 		{name: "audit max is zero", key: "AGENTMESH_AUDIT_MAX_EVENTS", value: "0"},
+		{name: "MCP timeout is zero", key: "AGENTMESH_MCP_DEFAULT_TIMEOUT", value: "0s"},
 	}
 
 	for _, test := range tests {
@@ -176,6 +180,8 @@ func clearEnvironment(t *testing.T) {
 		"AGENTMESH_AUDIT_RETENTION",
 		"AGENTMESH_AUDIT_MAX_EVENTS",
 		"AGENTMESH_METRICS_ADDR",
+		"AGENTMESH_MCP_SERVERS",
+		"AGENTMESH_MCP_DEFAULT_TIMEOUT",
 	} {
 		t.Setenv(key, "")
 	}

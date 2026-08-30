@@ -109,6 +109,33 @@ curl http://localhost:8080/api/v1/agents/agt_REPLACE_ME/health
 
 The response contains `unknown`, `healthy`, or `unhealthy`, plus `last_checked_at` and a controlled failure `reason` when available. Reading the endpoint is non-blocking: it returns the cached state and schedules a refresh. Legacy/demo and non-HTTP Agents remain `unknown`. Health is deliberately separate from the persisted Agent definition; Router V1 consumes this derived state using its documented healthy/unknown tiers.
 
+## MCP tools
+
+List configured servers and their non-secret local policies:
+
+```bash
+curl http://localhost:8080/api/v1/tools/servers
+```
+
+Discover the tools still visible after allow/deny filtering:
+
+```bash
+curl 'http://localhost:8080/api/v1/tools?server_id=search'
+```
+
+Invoke an allowed tool:
+
+```bash
+curl -X POST http://localhost:8080/api/v1/tools/call \
+  -H 'Content-Type: application/json' \
+  -d '{"server_id":"search","name":"search","arguments":{"q":"AgentMesh"}}'
+```
+
+Unknown servers return `404`, locally denied tools return `403`, deadline
+expiration returns `504`, and upstream protocol/transport failures return
+`502`. See [MCP tool gateway](mcp-tools.md) for registry configuration,
+authentication, protocol revision, and the synchronous JSON boundary.
+
 ## Runs
 
 Submit an asynchronous run:

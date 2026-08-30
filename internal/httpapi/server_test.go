@@ -21,6 +21,7 @@ import (
 	"github.com/thiagomontozo/agentmesh/internal/domain"
 	"github.com/thiagomontozo/agentmesh/internal/engine"
 	"github.com/thiagomontozo/agentmesh/internal/events"
+	"github.com/thiagomontozo/agentmesh/internal/mcp"
 	"github.com/thiagomontozo/agentmesh/internal/queue"
 	agentruntime "github.com/thiagomontozo/agentmesh/internal/runtime"
 	"github.com/thiagomontozo/agentmesh/internal/store"
@@ -1203,6 +1204,52 @@ func waitForRunStatus(t *testing.T, repository store.Repository, runID string, w
 		time.Sleep(time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for run status %s", want)
+}
+
+func TestMCPToolRegistryDiscoveryPolicyAndCallAPI(t *testing.T) {
+	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			ID     uint64 `json:"id"`
+			Method string `json:"method"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatal(err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if request.Method == "tools/list" {
+			_, _ = fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%d,"result":{"tools":[{"name":"query","inputSchema":{"type":"object"}},{"name":"delete","inputSchema":{"type":"object"}}]}}`, request.ID)
+			return
+		}
+		_, _ = fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%d,"result":{"resultType":"complete","content":[{"type":"text","text":"ok"}]}}`, request.ID)
+	}))
+	defer remote.Close()
+	registry := mcp.NewRegistry()
+	if err := registry.Register(mcp.Server{ID: "search", Endpoint: remote.URL, AllowedTools: []string{"query"}, Timeout: time.Second}); err != nil {
+		t.Fatal(err)
+	}
+	server, _ := newTestServer(t)
+	server.SetToolGateway(mcp.NewGateway(registry, mcp.NewClient(remote.Client(), 4096, 4096, nil)))
+
+	serversResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(serversResponse, httptest.NewRequest(http.MethodGet, "/api/v1/tools/servers", nil))
+	if serversResponse.Code != http.StatusOK || !strings.Contains(serversResponse.Body.String(), `"id":"search"`) {
+		t.Fatalf("unexpected servers response: %d %s", serversResponse.Code, serversResponse.Body.String())
+	}
+	toolsResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(toolsResponse, httptest.NewRequest(http.MethodGet, "/api/v1/tools?server_id=search", nil))
+	if toolsResponse.Code != http.StatusOK || !strings.Contains(toolsResponse.Body.String(), `"name":"query"`) || strings.Contains(toolsResponse.Body.String(), `"name":"delete"`) {
+		t.Fatalf("unexpected filtered tools: %d %s", toolsResponse.Code, toolsResponse.Body.String())
+	}
+	deniedResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(deniedResponse, httptest.NewRequest(http.MethodPost, "/api/v1/tools/call", strings.NewReader(`{"server_id":"search","name":"delete"}`)))
+	if deniedResponse.Code != http.StatusForbidden {
+		t.Fatalf("expected denied tool status, got %d: %s", deniedResponse.Code, deniedResponse.Body.String())
+	}
+	callResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(callResponse, httptest.NewRequest(http.MethodPost, "/api/v1/tools/call", strings.NewReader(`{"server_id":"search","name":"query","arguments":{"q":"agentmesh"}}`)))
+	if callResponse.Code != http.StatusOK || !strings.Contains(callResponse.Body.String(), `"text":"ok"`) {
+		t.Fatalf("unexpected tool call response: %d %s", callResponse.Code, callResponse.Body.String())
+	}
 }
 
 type synchronizedBuffer struct {

@@ -22,6 +22,7 @@ import (
 	"github.com/thiagomontozo/agentmesh/internal/events"
 	"github.com/thiagomontozo/agentmesh/internal/httpapi"
 	"github.com/thiagomontozo/agentmesh/internal/llm"
+	"github.com/thiagomontozo/agentmesh/internal/mcp"
 	metricspkg "github.com/thiagomontozo/agentmesh/internal/metrics"
 	"github.com/thiagomontozo/agentmesh/internal/queue"
 	agentruntime "github.com/thiagomontozo/agentmesh/internal/runtime"
@@ -144,6 +145,14 @@ func main() {
 		logger.Error("LLM runtime registration failed", "error", err)
 		os.Exit(1)
 	}
+	mcpRegistry, err := mcp.ParseRegistry(cfg.MCPServersConfig, cfg.MCPDefaultTimeout)
+	if err != nil {
+		logger.Error("MCP server configuration failed", "error", err)
+		os.Exit(1)
+	}
+	mcpGateway := mcp.NewGateway(mcpRegistry, mcp.NewClient(
+		llmClient, cfg.HTTPMaxRequestBytes, cfg.HTTPMaxResponseBytes, authenticator,
+	))
 	runEngine := engine.NewWithResolver(repository, eventBus, runtimeResolver, runQueue, coordinator, cfg.Workers, engine.RetryPolicy{
 		MaxAttempts:    cfg.MaxAttempts,
 		InitialBackoff: cfg.RetryInitial,
@@ -187,6 +196,7 @@ func main() {
 		api := httpapi.NewWithInstanceID(repository, runEngine, eventBus, instanceID)
 		api.SetAPISecurity(apiAuthenticator, cfg.AuditRetention, cfg.AuditMaxEvents)
 		api.SetMetrics(metricsRegistry)
+		api.SetToolGateway(mcpGateway)
 		api.SetAgentHealth(healthService)
 		api.SetWorkflowController(workflowManager)
 		api.SetAgentCallLimits(cfg.AgentCallMaxDepth, cfg.AgentCallMaxChildren)
