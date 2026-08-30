@@ -75,8 +75,9 @@ allowlisted hosts, denied CIDRs, TLS requirements, and body limits are described
 in [HTTP Runtime security](http-runtime-security.md).
 
 `AGENTMESH_AGENT_AUTH_CONFIG` maps Agent IDs to Bearer/API-key configuration
-whose `secret_env` points to a separate environment variable. No secret is stored
-in AgentMesh persistence or returned through its API. See
+whose `secret_env` or absolute `secret_file` is resolved on every request. This
+supports mounted-secret rotation without restart. No secret is stored in
+AgentMesh persistence or returned through its API. See
 [Agent request authentication](agent-authentication.md).
 
 `AGENTMESH_API_AUTH_CONFIG` enables inbound Bearer authentication and RBAC using
@@ -84,6 +85,10 @@ environment-variable token references. Empty preserves the legacy unauthenticate
 API. `AGENTMESH_AUDIT_RETENTION` and `AGENTMESH_AUDIT_MAX_EVENTS` bound the
 persisted mutating-request history. See [API authentication](api-authentication.md)
 and [Audit log](audit-log.md).
+
+`GET /metrics` exposes bounded Prometheus counters and persisted Run-state
+gauges. Worker-only processes can expose the same endpoint on the opt-in
+`AGENTMESH_METRICS_ADDR`. See [Operational metrics](metrics.md).
 
 Example without Compose:
 

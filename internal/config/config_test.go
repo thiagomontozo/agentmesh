@@ -36,6 +36,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.AuditRetention != 90*24*time.Hour || cfg.AuditMaxEvents != 100000 {
 		t.Fatalf("unexpected audit defaults: %+v", cfg)
 	}
+	if cfg.MetricsAddr != "" {
+		t.Fatalf("metrics-only listener must be opt-in, got %q", cfg.MetricsAddr)
+	}
 }
 
 func TestLoadRejectsInvalidValues(t *testing.T) {
@@ -172,6 +175,7 @@ func clearEnvironment(t *testing.T) {
 		"AGENTMESH_API_AUTH_CONFIG",
 		"AGENTMESH_AUDIT_RETENTION",
 		"AGENTMESH_AUDIT_MAX_EVENTS",
+		"AGENTMESH_METRICS_ADDR",
 	} {
 		t.Setenv(key, "")
 	}

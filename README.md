@@ -59,6 +59,7 @@ The Engine resolves the already-selected Agent's runtime through a concurrency-s
 - Remote HTTP Agent execution through Agent Protocol V1
 - Policy-controlled HTTP Runtime with dial-time SSRF checks and bounded, uncompressed payloads
 - Per-Agent Bearer/API-key request authentication through non-persisted secret references
+- Request-time environment/mounted-file secret resolution with rotation support
 - Optional inbound Bearer authentication with reader/operator/admin/Agent RBAC
 - Bounded PostgreSQL/Memory audit history for mutating API requests
 - Formal Agent Protocol version compatibility and controlled unsupported-version errors
@@ -89,6 +90,7 @@ The Engine resolves the already-selected Agent's runtime through a concurrency-s
 - Cross-replica Run events and SSE through NATS pub/sub
 - Bounded PostgreSQL event history with stable SSE event IDs and restart replay
 - JSON operational logs correlated by request, instance, worker, Run, Agent, and attempt
+- Bounded Prometheus metrics for HTTP, Run lifecycle, routing, leases, recovery, and backlog
 - Persisted request correlation and explicit Run duration
 - Derived `unknown`/`healthy`/`unhealthy` status for remote HTTP Agents
 - Versioned Agent update/delete with optimistic concurrency and Run-history protection
@@ -112,6 +114,7 @@ The Engine resolves the already-selected Agent's runtime through a concurrency-s
 | --- | --- | --- |
 | `GET` | `/healthz` | Liveness |
 | `GET` | `/readyz` | Readiness |
+| `GET` | `/metrics` | Bounded Prometheus operational metrics |
 | `POST` | `/api/v1/agents` | Create an agent |
 | `GET` | `/api/v1/agents` | Discover agents by exact capability/runtime/protocol/health filters |
 | `GET` | `/api/v1/agents/{id}` | Get an agent |

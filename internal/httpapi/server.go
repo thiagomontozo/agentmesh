@@ -21,6 +21,7 @@ import (
 	"github.com/thiagomontozo/agentmesh/internal/domain"
 	"github.com/thiagomontozo/agentmesh/internal/engine"
 	"github.com/thiagomontozo/agentmesh/internal/events"
+	"github.com/thiagomontozo/agentmesh/internal/metrics"
 	"github.com/thiagomontozo/agentmesh/internal/observability"
 	agentrouter "github.com/thiagomontozo/agentmesh/internal/router"
 	"github.com/thiagomontozo/agentmesh/internal/store"
@@ -41,6 +42,7 @@ type Server struct {
 	authenticator        *apiauth.Authenticator
 	auditRetention       time.Duration
 	auditMaxEvents       int
+	metrics              *metrics.Registry
 }
 
 type workflowController interface {
@@ -96,11 +98,16 @@ func (s *Server) SetAPISecurity(authenticator *apiauth.Authenticator, auditReten
 	}
 }
 
+func (s *Server) SetMetrics(registry *metrics.Registry) { s.metrics = registry }
+
 func (s *Server) Handler() http.Handler {
 	handler := http.Handler(recoverMiddleware(s.mux))
 	handler = s.auditMiddleware(handler)
 	if s.authenticator != nil {
 		handler = s.authenticator.Middleware(handler)
+	}
+	if s.metrics != nil {
+		handler = s.metrics.HTTPMiddleware(handler)
 	}
 	return requestContextMiddleware(s.instanceID, loggingMiddleware(handler))
 }
@@ -128,6 +135,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/workflows/{id}/cancel", s.cancelWorkflow)
 	s.mux.HandleFunc("GET /api/v1/workflows/{id}/events", s.workflowEvents)
 	s.mux.HandleFunc("GET /api/v1/audit-events", s.listAuditEvents)
+	s.mux.HandleFunc("GET /metrics", s.prometheusMetrics)
 }
 
 type createWorkflowRequest struct {
@@ -673,6 +681,9 @@ func (s *Server) createAgentChildRun(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "could not route Agent call")
 			return
 		}
+		if s.metrics != nil {
+			s.metrics.ObserveRouting(decision.Strategy)
+		}
 		request.AgentID = decision.Agent.ID
 		request.RequiredCapabilities = decision.RequiredCapabilities
 	} else if _, err := s.store.GetAgent(r.Context(), request.AgentID); errors.Is(err, store.ErrNotFound) {
@@ -739,6 +750,21 @@ func (s *Server) listAuditEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, events)
+}
+
+func (s *Server) prometheusMetrics(w http.ResponseWriter, r *http.Request) {
+	if s.metrics == nil {
+		http.NotFound(w, r)
+		return
+	}
+	var output strings.Builder
+	if err := s.metrics.WritePrometheus(r.Context(), &output, s.store); err != nil {
+		slog.ErrorContext(r.Context(), "metrics collection failed", "error", err)
+		writeError(w, http.StatusServiceUnavailable, "metrics are unavailable")
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+	_, _ = io.WriteString(w, output.String())
 }
 
 func (s *Server) agentCallAncestry(ctx context.Context, parent domain.Run) (int, map[string]struct{}, error) {
@@ -847,6 +873,9 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "could not route run")
 			return
+		}
+		if s.metrics != nil {
+			s.metrics.ObserveRouting(decision.Strategy)
 		}
 		request.AgentID = decision.Agent.ID
 		request.RequiredCapabilities = decision.RequiredCapabilities

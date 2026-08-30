@@ -100,10 +100,12 @@ Level 7 claim.
 
 1. Add inbound API authentication/authorization and replace the trusted
    Agent-to-Agent caller header assertion with cryptographic identity.
-2. Integrate an external secret provider/rotation path behind
-   `RequestAuthenticator`; current environment-backed values load at startup.
-3. Add bounded operational metrics for queue depth, active Runs, latency,
-   attempts, failures, lease loss, recovery, and routing decisions.
+2. ~~Integrate an external secret provider/rotation path behind
+   `RequestAuthenticator`.~~ Resolved with request-time `SecretProvider`
+   resolution and atomically replaceable mounted files.
+3. ~~Add bounded operational metrics for queue depth, active Runs, latency,
+   attempts, failures, lease loss, recovery, and routing decisions.~~ Resolved
+   through the dependency-free Prometheus endpoint and bounded event/HTTP labels.
 4. Validate rolling upgrades and storage/protocol backward compatibility with
    mixed AgentMesh versions.
 

@@ -59,6 +59,11 @@ header after protocol encoding. Configuration contains only environment-variable
 references; credential values do not enter Agent persistence, the public API,
 events, or protocol bodies. See [Agent request authentication](agent-authentication.md).
 
+Credential references are resolved through `runtime.SecretProvider` for every
+request. The standard provider reads environment values or bounded absolute
+files, enabling mounted-secret rotation while keeping secret material out of
+Agent configuration and persistence.
+
 Transport failures are classified as temporary, permanent, timeout, canceled, or protocol errors. HTTP `408`, `429`, and `5xx` are temporary; other non-`200` statuses are permanent. A V1 failed response uses its `error.retryable` flag for classification. The Engine retains ownership of retry policy and, at this stage, continues its existing attempt policy for every non-context execution error.
 
 Each runtime attempt runs synchronously under a child context bounded by `AGENTMESH_ATTEMPT_TIMEOUT`. Attempt timeout is distinct from cancellation of the Engine's parent context: timeout consumes an attempt and may retry, while shutdown cancellation exits execution and leaves the running Run recoverable. No watchdog goroutine is created, so runtimes that honor context cannot leak execution goroutines or indefinitely block graceful worker shutdown.
@@ -143,7 +148,13 @@ The application emits JSON through `log/slog`. HTTP middleware accepts a safe `X
 
 Every process has an `instance_id`: `AGENTMESH_INSTANCE_ID` when configured, otherwise hostname plus a random suffix. Memory workers use stable IDs such as `memory-1`; JetStream deliveries acquire bounded worker slots such as `nats-1`. Engine lifecycle, retry, timeout, panic, lease, success, and failure logs add the identifiers available at their boundary: `request_id`, `instance_id`, `worker_id`, `run_id`, `agent_id`, and `attempt`.
 
-Terminal Runs expose persisted `duration_ms`, measured from execution start or, when execution never started, creation time. Recovery clears the partial duration before requeue. This increment intentionally does not add metrics, tracing, or OpenTelemetry; logs and persisted lifecycle fields are the operational baseline for evaluating those later.
+Terminal Runs expose persisted `duration_ms`, measured from execution start or, when execution never started, creation time. Recovery clears the partial duration before requeue. Distributed tracing and OpenTelemetry remain intentionally deferred.
+
+The API additionally exposes bounded Prometheus text metrics. A Broker wrapper
+counts only known Run event types, HTTP labels exclude raw paths, Router labels
+use finite strategies, and persisted status gauges are calculated on scrape.
+Counters remain replica-local and tracing remains out of scope. See
+[Operational metrics](metrics.md).
 
 ## Agent health
 
