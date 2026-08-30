@@ -327,6 +327,38 @@ func sortAgents(agents []domain.Agent) {
 func (m *Memory) CreateRun(_ context.Context, run domain.Run, idempotencyKey string) (domain.Run, bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	return m.createRunLocked(run, idempotencyKey)
+}
+
+func (m *Memory) CreateChildRun(_ context.Context, run domain.Run, idempotencyKey string, maxChildren int) (domain.Run, bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if run.ParentRunID == "" {
+		return domain.Run{}, false, fmt.Errorf("parent_run_id is required")
+	}
+	if idempotencyKey != "" {
+		if runID, ok := m.idempotencyKeys[idempotencyKey]; ok {
+			return cloneRun(m.runs[runID]), false, nil
+		}
+	}
+	if _, ok := m.runs[run.ParentRunID]; !ok {
+		return domain.Run{}, false, ErrNotFound
+	}
+	if maxChildren > 0 {
+		count := 0
+		for _, existing := range m.runs {
+			if existing.ParentRunID == run.ParentRunID {
+				count++
+			}
+		}
+		if count >= maxChildren {
+			return domain.Run{}, false, ErrChildRunLimit
+		}
+	}
+	return m.createRunLocked(run, idempotencyKey)
+}
+
+func (m *Memory) createRunLocked(run domain.Run, idempotencyKey string) (domain.Run, bool, error) {
 	if idempotencyKey != "" {
 		if runID, ok := m.idempotencyKeys[idempotencyKey]; ok {
 			return cloneRun(m.runs[runID]), false, nil

@@ -9,30 +9,32 @@ import (
 )
 
 type Config struct {
-	Addr                string
-	Mode                string
-	Workers             int
-	QueueSize           int
-	ExecutionDelay      time.Duration
-	AttemptTimeout      time.Duration
-	ShutdownTimeout     time.Duration
-	DatabaseURL         string
-	NATSURL             string
-	RedisURL            string
-	MaxAttempts         int
-	RetryInitial        time.Duration
-	RetryMax            time.Duration
-	NATSAckWait         time.Duration
-	CacheTTL            time.Duration
-	LeaseTTL            time.Duration
-	EventRetention      time.Duration
-	EventHistoryLimit   int
-	InstanceID          string
-	AgentHealthPath     string
-	AgentHealthInterval time.Duration
-	AgentHealthTimeout  time.Duration
-	AgentHealthWorkers  int
-	WorkflowConcurrency int
+	Addr                 string
+	Mode                 string
+	Workers              int
+	QueueSize            int
+	ExecutionDelay       time.Duration
+	AttemptTimeout       time.Duration
+	ShutdownTimeout      time.Duration
+	DatabaseURL          string
+	NATSURL              string
+	RedisURL             string
+	MaxAttempts          int
+	RetryInitial         time.Duration
+	RetryMax             time.Duration
+	NATSAckWait          time.Duration
+	CacheTTL             time.Duration
+	LeaseTTL             time.Duration
+	EventRetention       time.Duration
+	EventHistoryLimit    int
+	InstanceID           string
+	AgentHealthPath      string
+	AgentHealthInterval  time.Duration
+	AgentHealthTimeout   time.Duration
+	AgentHealthWorkers   int
+	WorkflowConcurrency  int
+	AgentCallMaxDepth    int
+	AgentCallMaxChildren int
 }
 
 func Load() (Config, error) {
@@ -161,6 +163,20 @@ func Load() (Config, error) {
 	if workflowConcurrency < 1 {
 		return Config{}, fmt.Errorf("AGENTMESH_WORKFLOW_CONCURRENCY must be >= 1")
 	}
+	agentCallMaxDepth, err := intEnv("AGENTMESH_AGENT_CALL_MAX_DEPTH", 8)
+	if err != nil {
+		return Config{}, err
+	}
+	if agentCallMaxDepth < 1 {
+		return Config{}, fmt.Errorf("AGENTMESH_AGENT_CALL_MAX_DEPTH must be >= 1")
+	}
+	agentCallMaxChildren, err := intEnv("AGENTMESH_AGENT_CALL_MAX_CHILDREN", 16)
+	if err != nil {
+		return Config{}, err
+	}
+	if agentCallMaxChildren < 1 {
+		return Config{}, fmt.Errorf("AGENTMESH_AGENT_CALL_MAX_CHILDREN must be >= 1")
+	}
 
 	databaseURL := stringEnv("AGENTMESH_DATABASE_URL", "")
 	natsURL := stringEnv("AGENTMESH_NATS_URL", "")
@@ -170,30 +186,32 @@ func Load() (Config, error) {
 	}
 
 	return Config{
-		Addr:                stringEnv("AGENTMESH_ADDR", ":8080"),
-		Mode:                mode,
-		Workers:             workers,
-		QueueSize:           queueSize,
-		ExecutionDelay:      executionDelay,
-		AttemptTimeout:      attemptTimeout,
-		ShutdownTimeout:     shutdownTimeout,
-		DatabaseURL:         databaseURL,
-		NATSURL:             natsURL,
-		RedisURL:            redisURL,
-		MaxAttempts:         maxAttempts,
-		RetryInitial:        retryInitial,
-		RetryMax:            retryMax,
-		NATSAckWait:         natsAckWait,
-		CacheTTL:            cacheTTL,
-		LeaseTTL:            leaseTTL,
-		EventRetention:      eventRetention,
-		EventHistoryLimit:   eventHistoryLimit,
-		InstanceID:          instanceID,
-		AgentHealthPath:     agentHealthPath,
-		AgentHealthInterval: agentHealthInterval,
-		AgentHealthTimeout:  agentHealthTimeout,
-		AgentHealthWorkers:  agentHealthWorkers,
-		WorkflowConcurrency: workflowConcurrency,
+		Addr:                 stringEnv("AGENTMESH_ADDR", ":8080"),
+		Mode:                 mode,
+		Workers:              workers,
+		QueueSize:            queueSize,
+		ExecutionDelay:       executionDelay,
+		AttemptTimeout:       attemptTimeout,
+		ShutdownTimeout:      shutdownTimeout,
+		DatabaseURL:          databaseURL,
+		NATSURL:              natsURL,
+		RedisURL:             redisURL,
+		MaxAttempts:          maxAttempts,
+		RetryInitial:         retryInitial,
+		RetryMax:             retryMax,
+		NATSAckWait:          natsAckWait,
+		CacheTTL:             cacheTTL,
+		LeaseTTL:             leaseTTL,
+		EventRetention:       eventRetention,
+		EventHistoryLimit:    eventHistoryLimit,
+		InstanceID:           instanceID,
+		AgentHealthPath:      agentHealthPath,
+		AgentHealthInterval:  agentHealthInterval,
+		AgentHealthTimeout:   agentHealthTimeout,
+		AgentHealthWorkers:   agentHealthWorkers,
+		WorkflowConcurrency:  workflowConcurrency,
+		AgentCallMaxDepth:    agentCallMaxDepth,
+		AgentCallMaxChildren: agentCallMaxChildren,
 	}, nil
 }
 

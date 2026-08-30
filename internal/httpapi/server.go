@@ -26,15 +26,17 @@ import (
 )
 
 type Server struct {
-	store       store.Repository
-	engine      *engine.Engine
-	events      events.Broker
-	mux         *http.ServeMux
-	instanceID  string
-	agentHealth agenthealth.Registry
-	discovery   *discovery.Service
-	agentRouter *agentrouter.Router
-	workflows   workflowController
+	store                store.Repository
+	engine               *engine.Engine
+	events               events.Broker
+	mux                  *http.ServeMux
+	instanceID           string
+	agentHealth          agenthealth.Registry
+	discovery            *discovery.Service
+	agentRouter          *agentrouter.Router
+	workflows            workflowController
+	agentCallMaxDepth    int
+	agentCallMaxChildren int
 }
 
 type workflowController interface {
@@ -49,7 +51,8 @@ func New(s store.Repository, e *engine.Engine, bus events.Broker) *Server {
 func NewWithInstanceID(s store.Repository, e *engine.Engine, bus events.Broker, instanceID string) *Server {
 	server := &Server{
 		store: s, engine: e, events: bus, mux: http.NewServeMux(), instanceID: instanceID,
-		agentHealth: agenthealth.Noop{},
+		agentHealth:       agenthealth.Noop{},
+		agentCallMaxDepth: 8, agentCallMaxChildren: 16,
 	}
 	server.discovery = discovery.New(s, server.agentHealth)
 	server.agentRouter = agentrouter.NewWithLoad(server.discovery, s)
@@ -69,6 +72,15 @@ func (s *Server) SetWorkflowController(controller workflowController) {
 	s.workflows = controller
 }
 
+func (s *Server) SetAgentCallLimits(maxDepth, maxChildren int) {
+	if maxDepth > 0 {
+		s.agentCallMaxDepth = maxDepth
+	}
+	if maxChildren > 0 {
+		s.agentCallMaxChildren = maxChildren
+	}
+}
+
 func (s *Server) Handler() http.Handler {
 	return requestContextMiddleware(s.instanceID, loggingMiddleware(recoverMiddleware(s.mux)))
 }
@@ -86,6 +98,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/runs", s.createRun)
 	s.mux.HandleFunc("GET /api/v1/runs/{id}", s.getRun)
 	s.mux.HandleFunc("GET /api/v1/runs/{id}/children", s.listChildRuns)
+	s.mux.HandleFunc("POST /api/v1/runs/{id}/children", s.createAgentChildRun)
 	s.mux.HandleFunc("POST /api/v1/runs/{id}/cancel", s.cancelRun)
 	s.mux.HandleFunc("GET /api/v1/runs/{id}/events", s.runEvents)
 	s.mux.HandleFunc("GET /api/v1/workflows", s.listWorkflows)
@@ -529,6 +542,183 @@ type createRunRequest struct {
 	ParentRunID          string   `json:"parent_run_id"`
 	RequiredCapabilities []string `json:"required_capabilities"`
 	Input                string   `json:"input"`
+}
+
+func (s *Server) createAgentChildRun(w http.ResponseWriter, r *http.Request) {
+	parent, err := s.store.GetRun(r.Context(), r.PathValue("id"))
+	if errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "parent Run not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load parent Run")
+		return
+	}
+	callerAgentID := strings.TrimSpace(r.Header.Get("X-AgentMesh-Caller-Agent-ID"))
+	if callerAgentID == "" || callerAgentID != parent.AgentID {
+		writeError(w, http.StatusForbidden, "caller Agent does not own the parent Run")
+		return
+	}
+	idempotencyKey := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
+	if idempotencyKey == "" {
+		writeError(w, http.StatusBadRequest, "Idempotency-Key is required for Agent-to-Agent calls")
+		return
+	}
+	if len(idempotencyKey) > 128 {
+		writeError(w, http.StatusBadRequest, "Idempotency-Key must be at most 128 characters")
+		return
+	}
+	var request createRunRequest
+	if err := decodeJSON(r, &request); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	request.AgentID = strings.TrimSpace(request.AgentID)
+	request.Input = strings.TrimSpace(request.Input)
+	if request.ParentRunID != "" {
+		writeError(w, http.StatusBadRequest, "parent_run_id is derived from the URL")
+		return
+	}
+	if request.Input == "" {
+		writeError(w, http.StatusBadRequest, "input is required")
+		return
+	}
+	if request.AgentID != "" && len(request.RequiredCapabilities) > 0 {
+		writeError(w, http.StatusBadRequest, "agent_id and required_capabilities are mutually exclusive")
+		return
+	}
+	if request.AgentID == "" && len(request.RequiredCapabilities) == 0 {
+		writeError(w, http.StatusBadRequest, "agent_id or required_capabilities is required")
+		return
+	}
+	routed := request.AgentID == ""
+	if routed {
+		request.RequiredCapabilities, err = agentrouter.NormalizeRequirements(request.RequiredCapabilities)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
+	storeKey := "agent-call:" + parent.ID + ":" + idempotencyKey
+	if existing, lookupErr := s.store.GetRunByIdempotencyKey(r.Context(), storeKey); lookupErr == nil {
+		if existing.ParentRunID != parent.ID || existing.Input != request.Input ||
+			(!routed && existing.AgentID != request.AgentID) ||
+			(routed && !slices.Equal(existing.RequiredCapabilities, request.RequiredCapabilities)) {
+			writeError(w, http.StatusConflict, "Idempotency-Key was already used with a different Agent call")
+			return
+		}
+		w.Header().Set("Idempotency-Replayed", "true")
+		writeJSON(w, http.StatusOK, existing)
+		return
+	} else if !errors.Is(lookupErr, store.ErrNotFound) {
+		writeError(w, http.StatusInternalServerError, "could not check Agent call idempotency")
+		return
+	}
+	if parent.Status != domain.RunRunning {
+		writeError(w, http.StatusConflict, "Agent-to-Agent calls require a running parent Run")
+		return
+	}
+	depth, ancestorAgents, err := s.agentCallAncestry(r.Context(), parent)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not validate Agent call ancestry")
+		return
+	}
+	if depth > s.agentCallMaxDepth {
+		writeError(w, http.StatusUnprocessableEntity, "Agent call maximum depth exceeded")
+		return
+	}
+	if routed {
+		decision, routeErr := s.agentRouter.Select(r.Context(), request.RequiredCapabilities)
+		if errors.Is(routeErr, agentrouter.ErrNoCandidate) {
+			writeError(w, http.StatusUnprocessableEntity, routeErr.Error())
+			return
+		}
+		if errors.Is(routeErr, agentrouter.ErrNoCapacity) {
+			writeError(w, http.StatusTooManyRequests, routeErr.Error())
+			return
+		}
+		if routeErr != nil {
+			writeError(w, http.StatusInternalServerError, "could not route Agent call")
+			return
+		}
+		request.AgentID = decision.Agent.ID
+		request.RequiredCapabilities = decision.RequiredCapabilities
+	} else if _, err := s.store.GetAgent(r.Context(), request.AgentID); errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "agent not found")
+		return
+	} else if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load agent")
+		return
+	}
+	if _, repeated := ancestorAgents[request.AgentID]; repeated {
+		writeError(w, http.StatusUnprocessableEntity, "Agent call would repeat an Agent in its ancestry")
+		return
+	}
+	run := domain.Run{
+		ID: newID("run"), AgentID: request.AgentID, ParentRunID: parent.ID,
+		RequiredCapabilities: request.RequiredCapabilities, Input: request.Input,
+		Status: domain.RunQueued, MaxAttempts: s.engine.MaxAttempts(),
+		RequestID: parent.RequestID, CreatedAt: time.Now().UTC(),
+	}
+	if run.RequestID == "" {
+		run.RequestID = observability.RequestID(r.Context())
+	}
+	if err := run.AttachTo(parent); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	created, isNew, err := s.store.CreateChildRun(r.Context(), run, storeKey, s.agentCallMaxChildren)
+	if errors.Is(err, store.ErrChildRunLimit) {
+		writeError(w, http.StatusTooManyRequests, "parent Run Agent-call fan-out limit reached")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not create Agent child Run")
+		return
+	}
+	if !isNew {
+		w.Header().Set("Idempotency-Replayed", "true")
+		writeJSON(w, http.StatusOK, created)
+		return
+	}
+	s.publishAgentChildRun(r.Context(), parent, created)
+	if err := s.engine.Enqueue(r.Context(), created.ID); err != nil {
+		if transitionErr := created.Fail(err, time.Now()); transitionErr == nil {
+			_ = s.store.UpdateRun(r.Context(), created)
+		}
+		writeError(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusAccepted, created)
+}
+
+func (s *Server) agentCallAncestry(ctx context.Context, parent domain.Run) (int, map[string]struct{}, error) {
+	depth := 1
+	agents := map[string]struct{}{parent.AgentID: {}}
+	seenRuns := map[string]struct{}{parent.ID: {}}
+	current := parent
+	for current.ParentRunID != "" {
+		if _, repeated := seenRuns[current.ParentRunID]; repeated {
+			return 0, nil, fmt.Errorf("Run ancestry contains a cycle")
+		}
+		ancestor, err := s.store.GetRun(ctx, current.ParentRunID)
+		if err != nil {
+			return 0, nil, err
+		}
+		seenRuns[ancestor.ID] = struct{}{}
+		agents[ancestor.AgentID] = struct{}{}
+		depth++
+		current = ancestor
+	}
+	return depth, agents, nil
+}
+
+func (s *Server) publishAgentChildRun(ctx context.Context, parent, child domain.Run) {
+	now := time.Now().UTC()
+	s.events.Publish(domain.RunEvent{RunID: child.ID, ParentRunID: child.ParentRunID, RootRunID: child.RootRunID, Type: "run.queued", Message: "run queued", Timestamp: now})
+	s.events.Publish(domain.RunEvent{RunID: parent.ID, ChildRunID: child.ID, ParentRunID: parent.ID, RootRunID: child.RootRunID, Type: "run.child_queued", Message: "child Run queued", Timestamp: now})
+	s.events.Publish(domain.RunEvent{RunID: parent.ID, ChildRunID: child.ID, ParentRunID: parent.ID, RootRunID: child.RootRunID, Type: "run.agent_call_queued", Message: "Agent-to-Agent call queued through AgentMesh", Timestamp: now})
+	slog.InfoContext(ctx, "Agent-to-Agent call queued", append(observability.ContextAttrs(ctx), "parent_run_id", parent.ID, "run_id", child.ID, "caller_agent_id", parent.AgentID, "agent_id", child.AgentID)...)
 }
 
 func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {

@@ -13,6 +13,7 @@ var ErrStaleExecution = errors.New("stale run execution fence")
 var ErrRunNotExecutable = errors.New("run is not executable")
 var ErrConflict = errors.New("concurrent update conflict")
 var ErrAgentInUse = errors.New("agent has dependent runs")
+var ErrChildRunLimit = errors.New("parent Run child limit reached")
 
 type PendingRun struct {
 	ID     string
@@ -37,6 +38,7 @@ type AgentRepository interface {
 
 type RunRepository interface {
 	CreateRun(ctx context.Context, run domain.Run, idempotencyKey string) (created domain.Run, isNew bool, err error)
+	CreateChildRun(ctx context.Context, run domain.Run, idempotencyKey string, maxChildren int) (created domain.Run, isNew bool, err error)
 	GetRun(ctx context.Context, id string) (domain.Run, error)
 	GetRunByIdempotencyKey(ctx context.Context, key string) (domain.Run, error)
 	UpdateRun(ctx context.Context, run domain.Run) error

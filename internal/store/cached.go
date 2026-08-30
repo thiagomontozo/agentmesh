@@ -88,6 +88,15 @@ func (c *Cached) CreateRun(ctx context.Context, run domain.Run, idempotencyKey s
 	return created, isNew, nil
 }
 
+func (c *Cached) CreateChildRun(ctx context.Context, run domain.Run, idempotencyKey string, maxChildren int) (domain.Run, bool, error) {
+	created, isNew, err := c.inner.CreateChildRun(ctx, run, idempotencyKey, maxChildren)
+	if err != nil {
+		return domain.Run{}, false, err
+	}
+	c.set(ctx, runKey(created.ID), created)
+	return created, isNew, nil
+}
+
 func (c *Cached) GetRun(ctx context.Context, id string) (domain.Run, error) {
 	var run domain.Run
 	found, err := c.cache.Get(ctx, runKey(id), &run)

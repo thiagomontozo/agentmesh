@@ -79,6 +79,43 @@ func TestMemoryWorkflowRequiresExistingAgent(t *testing.T) {
 	}
 }
 
+func TestMemoryAtomicallyLimitsChildRuns(t *testing.T) {
+	memory := NewMemory()
+	ctx := context.Background()
+	for _, id := range []string{"agt_parent", "agt_child"} {
+		_, _ = memory.CreateAgent(ctx, domain.Agent{ID: id, Name: id})
+	}
+	parent := domain.Run{ID: "run_parent", AgentID: "agt_parent", Status: domain.RunRunning, CreatedAt: time.Now().UTC()}
+	if _, _, err := memory.CreateRun(ctx, parent, ""); err != nil {
+		t.Fatal(err)
+	}
+	results := make(chan error, 2)
+	var wait sync.WaitGroup
+	for _, id := range []string{"run_child_a", "run_child_b"} {
+		wait.Add(1)
+		go func(id string) {
+			defer wait.Done()
+			_, _, err := memory.CreateChildRun(ctx, domain.Run{ID: id, AgentID: "agt_child", ParentRunID: parent.ID, Status: domain.RunQueued}, id, 1)
+			results <- err
+		}(id)
+	}
+	wait.Wait()
+	close(results)
+	var created, limited int
+	for err := range results {
+		if err == nil {
+			created++
+		} else if errors.Is(err, ErrChildRunLimit) {
+			limited++
+		} else {
+			t.Fatalf("unexpected child creation error: %v", err)
+		}
+	}
+	if created != 1 || limited != 1 {
+		t.Fatalf("expected one child and one limit error, got created=%d limited=%d", created, limited)
+	}
+}
+
 func TestMemoryAgentUpdateAndDeleteLifecycle(t *testing.T) {
 	ctx := context.Background()
 	memory := NewMemory()

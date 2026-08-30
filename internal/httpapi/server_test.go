@@ -161,6 +161,103 @@ func TestSequentialWorkflowStartHTTP(t *testing.T) {
 	t.Fatal("Workflow did not complete through HTTP start")
 }
 
+func TestAgentToAgentChildRunIsMediatedLimitedAndIdempotent(t *testing.T) {
+	repository := store.NewMemory()
+	for _, id := range []string{"agt_parent", "agt_child", "agt_other"} {
+		_, _ = repository.CreateAgent(context.Background(), domain.Agent{ID: id, Name: id})
+	}
+	parent := domain.Run{ID: "run_parent", AgentID: "agt_parent", Input: "parent", Status: domain.RunRunning, RequestID: "req_parent", CreatedAt: time.Now().UTC()}
+	if _, _, err := repository.CreateRun(context.Background(), parent, ""); err != nil {
+		t.Fatal(err)
+	}
+	bus := events.NewBus()
+	runEngine := engine.New(repository, bus, engine.DemoExecutor{Delay: time.Millisecond}, queue.NewMemory(8), coordination.NewMemory(), 1, engine.RetryPolicy{
+		MaxAttempts: 1, InitialBackoff: time.Millisecond, MaxBackoff: time.Millisecond, LeaseTTL: time.Minute,
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	runEngine.Start(ctx)
+	defer func() { cancel(); runEngine.Stop() }()
+	server := New(repository, runEngine, bus)
+	server.SetAgentCallLimits(4, 1)
+	parentEvents, unsubscribe := bus.Subscribe(parent.ID)
+	defer unsubscribe()
+	call := func(caller, key, agentID, input string) *httptest.ResponseRecorder {
+		body := fmt.Sprintf(`{"agent_id":%q,"input":%q}`, agentID, input)
+		request := httptest.NewRequest(http.MethodPost, "/api/v1/runs/"+parent.ID+"/children", strings.NewReader(body))
+		request.Header.Set("X-AgentMesh-Caller-Agent-ID", caller)
+		request.Header.Set("Idempotency-Key", key)
+		response := httptest.NewRecorder()
+		server.Handler().ServeHTTP(response, request)
+		return response
+	}
+	forbidden := call("agt_other", "wrong-caller", "agt_child", "task")
+	if forbidden.Code != http.StatusForbidden {
+		t.Fatalf("expected caller rejection, got %d: %s", forbidden.Code, forbidden.Body.String())
+	}
+	createdResponse := call("agt_parent", "call-1", "agt_child", "task")
+	if createdResponse.Code != http.StatusAccepted {
+		t.Fatalf("create Agent call: %d %s", createdResponse.Code, createdResponse.Body.String())
+	}
+	var child domain.Run
+	if err := json.Unmarshal(createdResponse.Body.Bytes(), &child); err != nil {
+		t.Fatal(err)
+	}
+	if child.ParentRunID != parent.ID || child.RootRunID != parent.ID || child.RequestID != parent.RequestID {
+		t.Fatalf("Agent call lost lineage/correlation: %+v", child)
+	}
+	replay := call("agt_parent", "call-1", "agt_child", "task")
+	if replay.Code != http.StatusOK || replay.Header().Get("Idempotency-Replayed") != "true" {
+		t.Fatalf("Agent call replay failed: %d %s", replay.Code, replay.Body.String())
+	}
+	limited := call("agt_parent", "call-2", "agt_other", "other")
+	if limited.Code != http.StatusTooManyRequests {
+		t.Fatalf("expected atomic fan-out limit, got %d: %s", limited.Code, limited.Body.String())
+	}
+	var sawAudit bool
+	deadline := time.After(time.Second)
+	for !sawAudit {
+		select {
+		case event := <-parentEvents:
+			sawAudit = event.Type == "run.agent_call_queued" && event.ChildRunID == child.ID
+		case <-deadline:
+			t.Fatal("parent Run did not receive Agent-call audit event")
+		}
+	}
+}
+
+func TestAgentToAgentRejectsDepthAndRepeatedAgent(t *testing.T) {
+	repository := store.NewMemory()
+	for _, id := range []string{"agt_a", "agt_b", "agt_c"} {
+		_, _ = repository.CreateAgent(context.Background(), domain.Agent{ID: id, Name: id})
+	}
+	root := domain.Run{ID: "run_root", AgentID: "agt_a", Status: domain.RunSucceeded, CreatedAt: time.Now().UTC()}
+	if _, _, err := repository.CreateRun(context.Background(), root, ""); err != nil {
+		t.Fatal(err)
+	}
+	parent := domain.Run{ID: "run_parent", AgentID: "agt_b", ParentRunID: root.ID, Status: domain.RunRunning, CreatedAt: time.Now().UTC()}
+	if _, _, err := repository.CreateRun(context.Background(), parent, ""); err != nil {
+		t.Fatal(err)
+	}
+	bus := events.NewBus()
+	runEngine := engine.New(repository, bus, engine.DemoExecutor{}, queue.NewMemory(4), coordination.NewMemory(), 1, engine.RetryPolicy{MaxAttempts: 1, LeaseTTL: time.Minute})
+	server := New(repository, runEngine, bus)
+	request := func(target string, maxDepth int) *httptest.ResponseRecorder {
+		server.SetAgentCallLimits(maxDepth, 4)
+		r := httptest.NewRequest(http.MethodPost, "/api/v1/runs/"+parent.ID+"/children", strings.NewReader(fmt.Sprintf(`{"agent_id":%q,"input":"task"}`, target)))
+		r.Header.Set("X-AgentMesh-Caller-Agent-ID", parent.AgentID)
+		r.Header.Set("Idempotency-Key", "key-"+target+strconv.Itoa(maxDepth))
+		w := httptest.NewRecorder()
+		server.Handler().ServeHTTP(w, r)
+		return w
+	}
+	if response := request("agt_c", 1); response.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected depth rejection, got %d: %s", response.Code, response.Body.String())
+	}
+	if response := request("agt_a", 4); response.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected repeated Agent rejection, got %d: %s", response.Code, response.Body.String())
+	}
+}
+
 func TestRequestIDIsPreservedOrGenerated(t *testing.T) {
 	server, _ := newTestServer(t)
 	for _, test := range []struct {

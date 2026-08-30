@@ -130,6 +130,7 @@ func main() {
 	api := httpapi.NewWithInstanceID(repository, runEngine, eventBus, instanceID)
 	api.SetAgentHealth(healthService)
 	api.SetWorkflowController(workflowManager)
+	api.SetAgentCallLimits(cfg.AgentCallMaxDepth, cfg.AgentCallMaxChildren)
 	server := &http.Server{
 		Addr:              cfg.Addr,
 		Handler:           api.Handler(),
