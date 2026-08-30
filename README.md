@@ -59,6 +59,8 @@ The Engine resolves the already-selected Agent's runtime through a concurrency-s
 - Remote HTTP Agent execution through Agent Protocol V1
 - Policy-controlled HTTP Runtime with dial-time SSRF checks and bounded, uncompressed payloads
 - Per-Agent Bearer/API-key request authentication through non-persisted secret references
+- Optional inbound Bearer authentication with reader/operator/admin/Agent RBAC
+- Bounded PostgreSQL/Memory audit history for mutating API requests
 - Formal Agent Protocol version compatibility and controlled unsupported-version errors
 - Opt-in stable effect idempotency across remote Agent retries
 - Asynchronous run submission

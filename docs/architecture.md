@@ -132,6 +132,13 @@ The current demo executor is deterministic. For remote side effects, the attempt
 
 ## Basic observability
 
+Inbound API authentication is an optional middleware boundary. Bearer subjects
+carry bounded reader/operator/admin/agent roles; Agent credentials bind one
+persisted Agent ID and therefore replace the spoofable caller header for
+Agent-to-Agent requests. Mutating requests admitted through the boundary create
+bounded audit records in Memory or PostgreSQL. See [API authentication](api-authentication.md)
+and [Audit log](audit-log.md).
+
 The application emits JSON through `log/slog`. HTTP middleware accepts a safe `X-Request-ID` or generates one, returns it in the response, and records method, path, status, response size, and duration. Run creation persists that correlation ID so asynchronous execution logs can retain the originating request context after queue delivery.
 
 Every process has an `instance_id`: `AGENTMESH_INSTANCE_ID` when configured, otherwise hostname plus a random suffix. Memory workers use stable IDs such as `memory-1`; JetStream deliveries acquire bounded worker slots such as `nats-1`. Engine lifecycle, retry, timeout, panic, lease, success, and failure logs add the identifiers available at their boundary: `request_id`, `instance_id`, `worker_id`, `run_id`, `agent_id`, and `attempt`.

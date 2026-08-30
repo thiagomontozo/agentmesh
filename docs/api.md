@@ -8,6 +8,11 @@ The API uses JSON under `/api/v1`. Errors have the form:
 
 Every response includes `X-Request-ID`. A client-provided value is preserved when it is at most 128 characters and contains only letters, digits, `-`, `_`, `.`, or `:`; otherwise AgentMesh generates a safe ID. A newly created Run persists this value as `request_id` for asynchronous correlation.
 
+Production deployments can require Bearer authentication with bounded
+`reader`, `operator`, `admin`, and Agent-bound roles. See
+[API authentication and authorization](api-authentication.md). When enabled,
+only `/healthz` and `/readyz` remain public.
+
 ## Health
 
 ```bash
@@ -169,7 +174,9 @@ The request may use `agent_id` instead of `required_capabilities`. The parent mu
 
 AgentMesh inherits `request_id`, derives parent/root lineage, prevents an Agent ID from repeating in the ancestry, enforces configured depth/direct-child limits, and emits `run.agent_call_queued` on the parent. Direct-child admission is atomic in Memory and PostgreSQL.
 
-`X-AgentMesh-Caller-Agent-ID` is not authentication. It is a temporary identity assertion for trusted networks until protocol authentication is implemented. Protect this endpoint with an authenticated gateway and do not expose it directly to untrusted clients.
+With inbound authentication enabled, an `agent` Bearer credential supplies the
+caller identity and the server ignores `X-AgentMesh-Caller-Agent-ID`. Without
+inbound authentication, the header remains a legacy trusted-network assertion.
 
 Run status progresses through `queued`, `running`, and a terminal state: `succeeded`, `failed`, or `canceled`. The response includes `request_id`, `attempt`, `max_attempts`, lifecycle timestamps, and `duration_ms`. Duration is explicit after a terminal transition and measures execution time from `started_at`, or total queued lifetime if execution never started.
 

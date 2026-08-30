@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/thiagomontozo/agentmesh/internal/agenthealth"
+	"github.com/thiagomontozo/agentmesh/internal/apiauth"
 	"github.com/thiagomontozo/agentmesh/internal/coordination"
 	"github.com/thiagomontozo/agentmesh/internal/domain"
 	"github.com/thiagomontozo/agentmesh/internal/engine"
@@ -52,6 +53,90 @@ func TestHealth(t *testing.T) {
 
 	if response.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", response.Code)
+	}
+}
+
+func TestInboundAuthenticationRBACAndAuditLog(t *testing.T) {
+	server, _ := newTestServer(t)
+	secrets := map[string]string{"READER": "read-token", "OPERATOR": "operate-token", "ADMIN": "admin-token"}
+	authenticator, err := apiauth.New(`{
+		"reader":{"secret_env":"READER","roles":["reader"]},
+		"operator":{"secret_env":"OPERATOR","roles":["operator"]},
+		"admin":{"secret_env":"ADMIN","roles":["admin"]}
+	}`, func(name string) (string, bool) { value, ok := secrets[name]; return value, ok })
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.SetAPISecurity(authenticator, time.Hour, 100)
+	handler := server.Handler()
+	request := func(method, path, token, body string) *httptest.ResponseRecorder {
+		t.Helper()
+		r := httptest.NewRequest(method, path, strings.NewReader(body))
+		if token != "" {
+			r.Header.Set("Authorization", "Bearer "+token)
+		}
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, r)
+		return response
+	}
+
+	if got := request(http.MethodGet, "/api/v1/agents", "", ""); got.Code != http.StatusUnauthorized {
+		t.Fatalf("expected authentication challenge, got %d", got.Code)
+	}
+	if got := request(http.MethodPost, "/api/v1/agents", "read-token", `{"name":"denied"}`); got.Code != http.StatusForbidden {
+		t.Fatalf("expected reader mutation rejection, got %d", got.Code)
+	}
+	created := request(http.MethodPost, "/api/v1/agents", "operate-token", `{"name":"secured"}`)
+	if created.Code != http.StatusCreated {
+		t.Fatalf("operator create failed: %d %s", created.Code, created.Body.String())
+	}
+	if got := request(http.MethodGet, "/api/v1/audit-events", "read-token", ""); got.Code != http.StatusForbidden {
+		t.Fatalf("expected audit log to require admin, got %d", got.Code)
+	}
+	audit := request(http.MethodGet, "/api/v1/audit-events", "admin-token", "")
+	if audit.Code != http.StatusOK || !strings.Contains(audit.Body.String(), `"subject":"operator"`) ||
+		!strings.Contains(audit.Body.String(), `"method":"POST"`) {
+		t.Fatalf("unexpected audit history: %d %s", audit.Code, audit.Body.String())
+	}
+}
+
+func TestAuthenticatedAgentIdentityCannotBeSpoofedByHeader(t *testing.T) {
+	repository := store.NewMemory()
+	for _, id := range []string{"agt_parent", "agt_child", "agt_other"} {
+		_, _ = repository.CreateAgent(context.Background(), domain.Agent{ID: id, Name: id})
+	}
+	parent := domain.Run{ID: "run_secured_parent", AgentID: "agt_parent", Status: domain.RunRunning, CreatedAt: time.Now().UTC()}
+	_, _, _ = repository.CreateRun(context.Background(), parent, "")
+	bus := events.NewBus()
+	runEngine := engine.New(repository, bus, engine.DemoExecutor{}, queue.NewMemory(2), coordination.NewMemory(), 1, engine.RetryPolicy{MaxAttempts: 1})
+	ctx, cancel := context.WithCancel(context.Background())
+	runEngine.Start(ctx)
+	defer func() { cancel(); runEngine.Stop() }()
+	server := New(repository, runEngine, bus)
+	authenticator, err := apiauth.New(`{
+		"parent":{"secret_env":"PARENT","roles":["agent"],"agent_id":"agt_parent"},
+		"other":{"secret_env":"OTHER","roles":["agent"],"agent_id":"agt_other"}
+	}`, func(name string) (string, bool) {
+		return map[string]string{"PARENT": "parent-token", "OTHER": "other-token"}[name], true
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.SetAPISecurity(authenticator, time.Hour, 100)
+	call := func(token, claimed string) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodPost, "/api/v1/runs/"+parent.ID+"/children", strings.NewReader(`{"agent_id":"agt_child","input":"task"}`))
+		request.Header.Set("Authorization", "Bearer "+token)
+		request.Header.Set("X-AgentMesh-Caller-Agent-ID", claimed)
+		request.Header.Set("Idempotency-Key", token)
+		response := httptest.NewRecorder()
+		server.Handler().ServeHTTP(response, request)
+		return response
+	}
+	if response := call("other-token", "agt_parent"); response.Code != http.StatusForbidden {
+		t.Fatalf("spoofed caller was accepted: %d %s", response.Code, response.Body.String())
+	}
+	if response := call("parent-token", "agt_other"); response.Code != http.StatusAccepted {
+		t.Fatalf("authenticated owner was rejected: %d %s", response.Code, response.Body.String())
 	}
 }
 

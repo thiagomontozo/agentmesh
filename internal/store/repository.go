@@ -67,10 +67,16 @@ type WorkflowRepository interface {
 	ListWorkflowEvents(ctx context.Context, workflowID string, limit int) ([]domain.WorkflowEvent, error)
 }
 
+type AuditRepository interface {
+	AppendAuditEvent(ctx context.Context, event domain.AuditEvent, retention time.Duration, maxEvents int) error
+	ListAuditEvents(ctx context.Context, limit int) ([]domain.AuditEvent, error)
+}
+
 type Repository interface {
 	AgentRepository
 	RunRepository
 	EventRepository
 	WorkflowRepository
+	AuditRepository
 	Ping(ctx context.Context) error
 }

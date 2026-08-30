@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -236,6 +237,25 @@ func TestMemoryPersistsAgentExecutionMetadata(t *testing.T) {
 	}
 	if isolated.Capabilities[0] != "legal-search" {
 		t.Fatalf("stored capabilities were mutated through an external slice: %#v", isolated.Capabilities)
+	}
+}
+
+func TestMemoryAuditHistoryIsBoundedAndIsolated(t *testing.T) {
+	memory := NewMemory()
+	for index := 1; index <= 3; index++ {
+		event := domain.AuditEvent{ID: fmt.Sprintf("aud_%d", index), Timestamp: time.Now().UTC(), Subject: "operator", Roles: []string{"operator"}, Method: "POST", Path: "/api/v1/runs", Status: 202}
+		if err := memory.AppendAuditEvent(context.Background(), event, time.Hour, 2); err != nil {
+			t.Fatal(err)
+		}
+	}
+	events, err := memory.ListAuditEvents(context.Background(), 10)
+	if err != nil || len(events) != 2 || events[0].ID != "aud_2" || events[1].ID != "aud_3" {
+		t.Fatalf("unexpected bounded audit history: %+v err=%v", events, err)
+	}
+	events[0].Roles[0] = "mutated"
+	again, _ := memory.ListAuditEvents(context.Background(), 10)
+	if again[0].Roles[0] != "operator" {
+		t.Fatal("audit role slice escaped Memory isolation")
 	}
 }
 

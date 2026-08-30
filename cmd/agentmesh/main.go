@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/thiagomontozo/agentmesh/internal/agenthealth"
+	"github.com/thiagomontozo/agentmesh/internal/apiauth"
 	"github.com/thiagomontozo/agentmesh/internal/cache"
 	"github.com/thiagomontozo/agentmesh/internal/config"
 	"github.com/thiagomontozo/agentmesh/internal/coordination"
@@ -155,6 +156,12 @@ func main() {
 		healthService.Start(rootCtx)
 
 		api := httpapi.NewWithInstanceID(repository, runEngine, eventBus, instanceID)
+		apiAuthenticator, authErr := apiauth.New(cfg.APIAuthConfig, os.LookupEnv)
+		if authErr != nil {
+			logger.Error("API authentication configuration failed", "error", authErr)
+			os.Exit(1)
+		}
+		api.SetAPISecurity(apiAuthenticator, cfg.AuditRetention, cfg.AuditMaxEvents)
 		api.SetAgentHealth(healthService)
 		api.SetWorkflowController(workflowManager)
 		api.SetAgentCallLimits(cfg.AgentCallMaxDepth, cfg.AgentCallMaxChildren)

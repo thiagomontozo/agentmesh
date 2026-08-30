@@ -47,6 +47,9 @@ type Config struct {
 	HTTPMaxRequestBytes  int64
 	HTTPMaxResponseBytes int64
 	AgentAuthConfig      string
+	APIAuthConfig        string
+	AuditRetention       time.Duration
+	AuditMaxEvents       int
 }
 
 func Load() (Config, error) {
@@ -231,6 +234,14 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	auditRetention, err := durationEnv("AGENTMESH_AUDIT_RETENTION", 90*24*time.Hour)
+	if err != nil || auditRetention <= 0 {
+		return Config{}, fmt.Errorf("AGENTMESH_AUDIT_RETENTION must be a positive duration")
+	}
+	auditMaxEvents, err := intEnv("AGENTMESH_AUDIT_MAX_EVENTS", 100000)
+	if err != nil || auditMaxEvents < 1 {
+		return Config{}, fmt.Errorf("AGENTMESH_AUDIT_MAX_EVENTS must be a positive integer")
+	}
 
 	databaseURL := stringEnv("AGENTMESH_DATABASE_URL", "")
 	natsURL := stringEnv("AGENTMESH_NATS_URL", "")
@@ -277,6 +288,9 @@ func Load() (Config, error) {
 		HTTPMaxRequestBytes:  httpMaxRequestBytes,
 		HTTPMaxResponseBytes: httpMaxResponseBytes,
 		AgentAuthConfig:      stringEnv("AGENTMESH_AGENT_AUTH_CONFIG", ""),
+		APIAuthConfig:        stringEnv("AGENTMESH_API_AUTH_CONFIG", ""),
+		AuditRetention:       auditRetention,
+		AuditMaxEvents:       auditMaxEvents,
 	}, nil
 }
 

@@ -219,6 +219,14 @@ func (c *Cached) ListWorkflowEvents(ctx context.Context, workflowID string, limi
 	return c.inner.ListWorkflowEvents(ctx, workflowID, limit)
 }
 
+func (c *Cached) AppendAuditEvent(ctx context.Context, event domain.AuditEvent, retention time.Duration, maxEvents int) error {
+	return c.inner.AppendAuditEvent(ctx, event, retention, maxEvents)
+}
+
+func (c *Cached) ListAuditEvents(ctx context.Context, limit int) ([]domain.AuditEvent, error) {
+	return c.inner.ListAuditEvents(ctx, limit)
+}
+
 func (c *Cached) Ping(ctx context.Context) error {
 	if err := c.inner.Ping(ctx); err != nil {
 		return err

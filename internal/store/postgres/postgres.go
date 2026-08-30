@@ -929,6 +929,61 @@ func (r *Repository) ListRunEvents(ctx context.Context, runID string, limit int)
 	return events, nil
 }
 
+func (r *Repository) AppendAuditEvent(ctx context.Context, event domain.AuditEvent, retention time.Duration, maxEvents int) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin audit append: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `INSERT INTO audit_events
+		(event_id, timestamp, request_id, instance_id, subject, roles, agent_id, method, path, status)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT (event_id) DO NOTHING`,
+		event.ID, event.Timestamp, event.RequestID, event.InstanceID, event.Subject,
+		event.Roles, event.AgentID, event.Method, event.Path, event.Status); err != nil {
+		return fmt.Errorf("insert audit event: %w", err)
+	}
+	if retention > 0 {
+		if _, err := tx.Exec(ctx, "DELETE FROM audit_events WHERE timestamp < $1", time.Now().UTC().Add(-retention)); err != nil {
+			return fmt.Errorf("retain audit events: %w", err)
+		}
+	}
+	if maxEvents > 0 {
+		if _, err := tx.Exec(ctx, `DELETE FROM audit_events WHERE sequence < COALESCE((
+			SELECT sequence FROM audit_events ORDER BY sequence DESC OFFSET $1 LIMIT 1), 0)`, maxEvents-1); err != nil {
+			return fmt.Errorf("limit audit events: %w", err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit audit append: %w", err)
+	}
+	return nil
+}
+
+func (r *Repository) ListAuditEvents(ctx context.Context, limit int) ([]domain.AuditEvent, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	rows, err := r.pool.Query(ctx, `SELECT event_id, timestamp, request_id, instance_id,
+		subject, roles, agent_id, method, path, status FROM (
+			SELECT sequence, event_id, timestamp, request_id, instance_id, subject, roles,
+				agent_id, method, path, status FROM audit_events ORDER BY sequence DESC LIMIT $1
+		) recent ORDER BY sequence`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list audit events: %w", err)
+	}
+	defer rows.Close()
+	events := make([]domain.AuditEvent, 0, limit)
+	for rows.Next() {
+		var event domain.AuditEvent
+		if err := rows.Scan(&event.ID, &event.Timestamp, &event.RequestID, &event.InstanceID,
+			&event.Subject, &event.Roles, &event.AgentID, &event.Method, &event.Path, &event.Status); err != nil {
+			return nil, fmt.Errorf("scan audit event: %w", err)
+		}
+		events = append(events, event)
+	}
+	return events, rows.Err()
+}
+
 func (r *Repository) Ping(ctx context.Context) error {
 	if err := r.pool.Ping(ctx); err != nil {
 		return fmt.Errorf("ping PostgreSQL: %w", err)
