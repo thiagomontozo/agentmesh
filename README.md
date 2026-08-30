@@ -57,6 +57,7 @@ The Engine resolves the already-selected Agent's runtime through a concurrency-s
 - Go standard-library HTTP server (`net/http`)
 - Agent registration and lookup
 - Remote HTTP Agent execution through Agent Protocol V1
+- Policy-controlled HTTP Runtime with dial-time SSRF checks and bounded, uncompressed payloads
 - Asynchronous run submission
 - Configurable concurrent worker pool
 - Explicit run state machine: `queued → running → succeeded/failed/canceled`
@@ -194,6 +195,14 @@ With the server running in one terminal:
 | `AGENTMESH_AGENT_HEALTH_INTERVAL` | `30s` | Background health scan interval |
 | `AGENTMESH_AGENT_HEALTH_TIMEOUT` | `2s` | Per-probe timeout |
 | `AGENTMESH_AGENT_HEALTH_WORKERS` | `2` | Fixed probe worker count |
+| `AGENTMESH_HTTP_REQUIRE_HTTPS` | `false` | Require TLS for remote Agent execution |
+| `AGENTMESH_HTTP_ALLOW_PRIVATE_NETWORKS` | `true` | Allow private Agent addresses |
+| `AGENTMESH_HTTP_ALLOW_LOOPBACK` | `true` | Allow loopback Agent addresses |
+| `AGENTMESH_HTTP_ALLOW_LINK_LOCAL` | `false` | Allow link-local/metadata destinations |
+| `AGENTMESH_HTTP_ALLOWED_HOSTS` | — | Optional comma-separated exact/wildcard host allowlist |
+| `AGENTMESH_HTTP_BLOCKED_CIDRS` | — | Additional comma-separated denied CIDRs |
+| `AGENTMESH_HTTP_MAX_REQUEST_BYTES` | `1048576` | Maximum Agent Protocol request bytes |
+| `AGENTMESH_HTTP_MAX_RESPONSE_BYTES` | `1048576` | Maximum Agent response bytes |
 
 ## Test
 
@@ -245,6 +254,7 @@ docs/                   roadmap and architecture notes
 - [External HTTP Agents](docs/external-agents.md)
 - [Multi-replica integration test](docs/multi-replica-testing.md)
 - [API and Worker separation analysis](docs/api-worker-separation-analysis.md)
+- [HTTP Runtime security](docs/http-runtime-security.md)
 - [Configuration and operations](docs/configuration.md)
 - [API usage and examples](docs/api.md)
 - [Troubleshooting](docs/troubleshooting.md)

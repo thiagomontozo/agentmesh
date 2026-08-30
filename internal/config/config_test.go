@@ -29,6 +29,10 @@ func TestLoadDefaults(t *testing.T) {
 		cfg.AgentCallMaxDepth != 8 || cfg.AgentCallMaxChildren != 16 {
 		t.Fatalf("unexpected agent health defaults: %+v", cfg)
 	}
+	if cfg.HTTPRequireHTTPS || !cfg.HTTPAllowPrivate || !cfg.HTTPAllowLoopback || cfg.HTTPAllowLinkLocal ||
+		cfg.HTTPMaxRequestBytes != 1<<20 || cfg.HTTPMaxResponseBytes != 1<<20 {
+		t.Fatalf("unexpected HTTP security defaults: %+v", cfg)
+	}
 }
 
 func TestLoadRejectsInvalidValues(t *testing.T) {
@@ -61,6 +65,10 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 		{name: "workflow concurrency is zero", key: "AGENTMESH_WORKFLOW_CONCURRENCY", value: "0"},
 		{name: "Agent call depth is zero", key: "AGENTMESH_AGENT_CALL_MAX_DEPTH", value: "0"},
 		{name: "Agent call fan-out is zero", key: "AGENTMESH_AGENT_CALL_MAX_CHILDREN", value: "0"},
+		{name: "HTTP require HTTPS is invalid", key: "AGENTMESH_HTTP_REQUIRE_HTTPS", value: "sometimes"},
+		{name: "HTTP request limit is zero", key: "AGENTMESH_HTTP_MAX_REQUEST_BYTES", value: "0"},
+		{name: "HTTP response limit is invalid", key: "AGENTMESH_HTTP_MAX_RESPONSE_BYTES", value: "large"},
+		{name: "HTTP blocked CIDR is invalid", key: "AGENTMESH_HTTP_BLOCKED_CIDRS", value: "private"},
 	}
 
 	for _, test := range tests {
@@ -135,6 +143,14 @@ func clearEnvironment(t *testing.T) {
 		"AGENTMESH_WORKFLOW_CONCURRENCY",
 		"AGENTMESH_AGENT_CALL_MAX_DEPTH",
 		"AGENTMESH_AGENT_CALL_MAX_CHILDREN",
+		"AGENTMESH_HTTP_REQUIRE_HTTPS",
+		"AGENTMESH_HTTP_ALLOW_PRIVATE_NETWORKS",
+		"AGENTMESH_HTTP_ALLOW_LOOPBACK",
+		"AGENTMESH_HTTP_ALLOW_LINK_LOCAL",
+		"AGENTMESH_HTTP_ALLOWED_HOSTS",
+		"AGENTMESH_HTTP_BLOCKED_CIDRS",
+		"AGENTMESH_HTTP_MAX_REQUEST_BYTES",
+		"AGENTMESH_HTTP_MAX_RESPONSE_BYTES",
 	} {
 		t.Setenv(key, "")
 	}

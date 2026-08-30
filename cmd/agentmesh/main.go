@@ -90,9 +90,21 @@ func main() {
 
 	executor := engine.DemoExecutor{Delay: cfg.ExecutionDelay}
 	runtimeResolver := agentruntime.NewRegistry(agentruntime.AdaptLegacy(executor))
+	httpRuntime, err := agentruntime.NewSecureHTTPRuntime(&http.Client{Timeout: cfg.AttemptTimeout}, agentruntime.HTTPOptions{
+		MaxRequestBytes: cfg.HTTPMaxRequestBytes, MaxResponseBytes: cfg.HTTPMaxResponseBytes,
+		Policy: agentruntime.HTTPPolicy{
+			RequireHTTPS: cfg.HTTPRequireHTTPS, AllowPrivate: cfg.HTTPAllowPrivate,
+			AllowLoopback: cfg.HTTPAllowLoopback, AllowLinkLocal: cfg.HTTPAllowLinkLocal,
+			AllowedHosts: cfg.HTTPAllowedHosts, BlockedCIDRs: cfg.HTTPBlockedCIDRs,
+		},
+	})
+	if err != nil {
+		logger.Error("HTTP runtime security configuration failed", "error", err)
+		os.Exit(1)
+	}
 	if err := runtimeResolver.Register(
 		agentruntime.RemoteRuntime,
-		agentruntime.NewHTTPRuntime(&http.Client{Timeout: cfg.AttemptTimeout}, 0),
+		httpRuntime,
 	); err != nil {
 		logger.Error("HTTP runtime registration failed", "error", err)
 		os.Exit(1)

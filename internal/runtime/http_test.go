@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -298,6 +299,73 @@ func TestHTTPRuntimeRejectsInvalidAgentConfiguration(t *testing.T) {
 			requireHTTPError(t, err, test.wantKind, 0)
 		})
 	}
+}
+
+func TestSecureHTTPRuntimeNetworkPolicy(t *testing.T) {
+	tests := []struct {
+		name     string
+		endpoint string
+		policy   agentruntime.HTTPPolicy
+	}{
+		{name: "requires HTTPS", endpoint: "http://agent.example", policy: agentruntime.HTTPPolicy{RequireHTTPS: true}},
+		{name: "blocks loopback", endpoint: "http://127.0.0.1:9000", policy: agentruntime.HTTPPolicy{AllowPrivate: true}},
+		{name: "blocks private", endpoint: "http://10.0.0.10:9000", policy: agentruntime.HTTPPolicy{AllowLoopback: true}},
+		{name: "blocks metadata link-local", endpoint: "http://169.254.169.254", policy: agentruntime.DefaultHTTPPolicy()},
+		{name: "enforces host allowlist", endpoint: "https://other.example", policy: agentruntime.HTTPPolicy{AllowedHosts: []string{"agent.example"}}},
+		{name: "enforces blocked CIDR", endpoint: "http://192.0.2.10", policy: agentruntime.HTTPPolicy{BlockedCIDRs: []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")}}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			runtime, err := agentruntime.NewSecureHTTPRuntime(nil, agentruntime.HTTPOptions{Policy: test.policy})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = executeRemote(context.Background(), runtime, test.endpoint)
+			requireHTTPError(t, err, agentruntime.HTTPErrorPermanent, 0)
+			if !errors.Is(err, agentruntime.ErrHTTPNetworkPolicy) {
+				t.Fatalf("expected policy error, got %v", err)
+			}
+		})
+	}
+}
+
+func TestSecureHTTPRuntimeAllowsConfiguredPrivateEndpoint(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		writeRuntimeResponse(t, response, protocolv1.RunResponse{ProtocolVersion: protocolv1.Version, RunID: "run_1", Status: protocolv1.StatusSucceeded})
+	}))
+	defer server.Close()
+	runtime, err := agentruntime.NewSecureHTTPRuntime(server.Client(), agentruntime.HTTPOptions{Policy: agentruntime.DefaultHTTPPolicy()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := executeRemote(context.Background(), runtime, server.URL); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestHTTPRuntimeLimitsRequestAndRejectsCompressedResponse(t *testing.T) {
+	runtime, err := agentruntime.NewSecureHTTPRuntime(nil, agentruntime.HTTPOptions{MaxRequestBytes: 32, Policy: agentruntime.DefaultHTTPPolicy()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = executeRemote(context.Background(), runtime, "http://127.0.0.1")
+	requireHTTPError(t, err, agentruntime.HTTPErrorProtocol, 0)
+
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.Header.Get("Accept-Encoding") != "identity" {
+			t.Errorf("unexpected Accept-Encoding: %q", request.Header.Get("Accept-Encoding"))
+		}
+		response.Header().Set("Content-Encoding", "gzip")
+		response.Header().Set("Content-Type", "application/json")
+		_, _ = response.Write([]byte("compressed"))
+	}))
+	defer server.Close()
+	runtime, err = agentruntime.NewSecureHTTPRuntime(server.Client(), agentruntime.HTTPOptions{Policy: agentruntime.DefaultHTTPPolicy()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = executeRemote(context.Background(), runtime, server.URL)
+	requireHTTPError(t, err, agentruntime.HTTPErrorProtocol, 0)
 }
 
 func executeRemote(ctx context.Context, runtime agentruntime.Runtime, endpoint string) (agentruntime.ExecutionResult, error) {

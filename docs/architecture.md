@@ -40,6 +40,13 @@ Runtime Resolver
 
 `runtime.HTTPRuntime` maps the internal execution request to Agent Protocol V1 and posts it to the registered Agent endpoint. It accepts `runtime: "remote"` with `protocol: "http"`; the endpoint is a base URL and `/v1/runs` is appended. Redirects are not followed, response bodies are bounded, and protocol responses are validated before their output is accepted.
 
+The production constructor wraps `http.Transport` with a configurable network
+policy. DNS answers are checked at dial time, link-local destinations are denied
+by default, custom host/CIDR rules are enforced, environment proxies and response
+decompression are disabled, TLS is at least 1.2, and both protocol directions are
+bounded. Private networks remain enabled by default for internal Agents. See
+[HTTP Runtime security](http-runtime-security.md).
+
 Transport failures are classified as temporary, permanent, timeout, canceled, or protocol errors. HTTP `408`, `429`, and `5xx` are temporary; other non-`200` statuses are permanent. A V1 failed response uses its `error.retryable` flag for classification. The Engine retains ownership of retry policy and, at this stage, continues its existing attempt policy for every non-context execution error.
 
 Each runtime attempt runs synchronously under a child context bounded by `AGENTMESH_ATTEMPT_TIMEOUT`. Attempt timeout is distinct from cancellation of the Engine's parent context: timeout consumes an attempt and may retry, while shutdown cancellation exits execution and leaves the running Run recoverable. No watchdog goroutine is created, so runtimes that honor context cannot leak execution goroutines or indefinitely block graceful worker shutdown.

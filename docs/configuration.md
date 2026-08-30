@@ -59,7 +59,12 @@ The API is available at `http://localhost:8080`. PostgreSQL migrations run autom
 
 Register a remote Agent with `runtime: "remote"`, `protocol: "http"`, and an HTTP or HTTPS base `endpoint`. AgentMesh appends `/v1/runs` and sends [Agent Protocol V1](agent-protocol-v1.md). `AGENTMESH_ATTEMPT_TIMEOUT` controls both the execution context and application HTTP client timeout; responses are limited to 1 MiB.
 
-Redirects, URL credentials, query strings, fragments, and non-HTTP schemes are rejected. Private network addresses are intentionally allowed because AgentMesh is designed to call internal services. Consequently, Agent registration is a privileged trust boundary: an untrusted registrant could use endpoints for SSRF, DNS-rebinding, or cloud metadata access. Network allow/deny policy is not implemented yet and must be enforced at the deployment network layer until the dedicated HTTP-runtime security stage.
+Redirects, URL credentials, query strings, fragments, proxies, automatic response
+decompression, and non-HTTP schemes are rejected. Private networks remain
+allowed by default because AgentMesh is designed to call internal services,
+while link-local/metadata addresses are denied. Dial-time address checks,
+allowlisted hosts, denied CIDRs, TLS requirements, and body limits are described
+in [HTTP Runtime security](http-runtime-security.md).
 
 Example without Compose:
 

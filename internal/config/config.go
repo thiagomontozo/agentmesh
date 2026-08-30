@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net/netip"
 	"os"
 	"strconv"
 	"strings"
@@ -35,6 +36,14 @@ type Config struct {
 	WorkflowConcurrency  int
 	AgentCallMaxDepth    int
 	AgentCallMaxChildren int
+	HTTPRequireHTTPS     bool
+	HTTPAllowPrivate     bool
+	HTTPAllowLoopback    bool
+	HTTPAllowLinkLocal   bool
+	HTTPAllowedHosts     []string
+	HTTPBlockedCIDRs     []netip.Prefix
+	HTTPMaxRequestBytes  int64
+	HTTPMaxResponseBytes int64
 }
 
 func Load() (Config, error) {
@@ -177,6 +186,34 @@ func Load() (Config, error) {
 	if agentCallMaxChildren < 1 {
 		return Config{}, fmt.Errorf("AGENTMESH_AGENT_CALL_MAX_CHILDREN must be >= 1")
 	}
+	httpRequireHTTPS, err := boolEnv("AGENTMESH_HTTP_REQUIRE_HTTPS", false)
+	if err != nil {
+		return Config{}, err
+	}
+	httpAllowPrivate, err := boolEnv("AGENTMESH_HTTP_ALLOW_PRIVATE_NETWORKS", true)
+	if err != nil {
+		return Config{}, err
+	}
+	httpAllowLoopback, err := boolEnv("AGENTMESH_HTTP_ALLOW_LOOPBACK", true)
+	if err != nil {
+		return Config{}, err
+	}
+	httpAllowLinkLocal, err := boolEnv("AGENTMESH_HTTP_ALLOW_LINK_LOCAL", false)
+	if err != nil {
+		return Config{}, err
+	}
+	httpMaxRequestBytes, err := int64Env("AGENTMESH_HTTP_MAX_REQUEST_BYTES", 1<<20)
+	if err != nil || httpMaxRequestBytes < 1 {
+		return Config{}, fmt.Errorf("AGENTMESH_HTTP_MAX_REQUEST_BYTES must be a positive integer")
+	}
+	httpMaxResponseBytes, err := int64Env("AGENTMESH_HTTP_MAX_RESPONSE_BYTES", 1<<20)
+	if err != nil || httpMaxResponseBytes < 1 {
+		return Config{}, fmt.Errorf("AGENTMESH_HTTP_MAX_RESPONSE_BYTES must be a positive integer")
+	}
+	httpBlockedCIDRs, err := prefixListEnv("AGENTMESH_HTTP_BLOCKED_CIDRS")
+	if err != nil {
+		return Config{}, err
+	}
 
 	databaseURL := stringEnv("AGENTMESH_DATABASE_URL", "")
 	natsURL := stringEnv("AGENTMESH_NATS_URL", "")
@@ -212,6 +249,14 @@ func Load() (Config, error) {
 		WorkflowConcurrency:  workflowConcurrency,
 		AgentCallMaxDepth:    agentCallMaxDepth,
 		AgentCallMaxChildren: agentCallMaxChildren,
+		HTTPRequireHTTPS:     httpRequireHTTPS,
+		HTTPAllowPrivate:     httpAllowPrivate,
+		HTTPAllowLoopback:    httpAllowLoopback,
+		HTTPAllowLinkLocal:   httpAllowLinkLocal,
+		HTTPAllowedHosts:     stringListEnv("AGENTMESH_HTTP_ALLOWED_HOSTS"),
+		HTTPBlockedCIDRs:     httpBlockedCIDRs,
+		HTTPMaxRequestBytes:  httpMaxRequestBytes,
+		HTTPMaxResponseBytes: httpMaxResponseBytes,
 	}, nil
 }
 
@@ -232,6 +277,54 @@ func intEnv(key string, fallback int) (int, error) {
 		return 0, fmt.Errorf("%s must be an integer: %w", key, err)
 	}
 	return parsed, nil
+}
+
+func int64Env(key string, fallback int64) (int64, error) {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback, nil
+	}
+	parsed, err := strconv.ParseInt(value, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("%s must be an integer: %w", key, err)
+	}
+	return parsed, nil
+}
+
+func boolEnv(key string, fallback bool) (bool, error) {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback, nil
+	}
+	parsed, err := strconv.ParseBool(value)
+	if err != nil {
+		return false, fmt.Errorf("%s must be true or false: %w", key, err)
+	}
+	return parsed, nil
+}
+
+func stringListEnv(key string) []string {
+	values := strings.Split(os.Getenv(key), ",")
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			result = append(result, value)
+		}
+	}
+	return result
+}
+
+func prefixListEnv(key string) ([]netip.Prefix, error) {
+	values := stringListEnv(key)
+	result := make([]netip.Prefix, 0, len(values))
+	for _, value := range values {
+		prefix, err := netip.ParsePrefix(value)
+		if err != nil {
+			return nil, fmt.Errorf("%s contains invalid CIDR %q: %w", key, value, err)
+		}
+		result = append(result, prefix.Masked())
+	}
+	return result, nil
 }
 
 func durationEnv(key string, fallback time.Duration) (time.Duration, error) {
