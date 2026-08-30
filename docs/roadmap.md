@@ -62,6 +62,7 @@
 - [x] Evidence-based architectural reassessment after runtime, routing, Workflow, and distributed increments
 - [x] Independent API/Worker process roles and crash/restart acceptance test
 - [x] Cross-replica Run cancellation with event signaling and persistence fallback
+- [x] Renewable per-Workflow scheduler ownership and replica takeover
 - [ ] Inbound API authentication
 - [ ] RBAC
 - [ ] Audit log

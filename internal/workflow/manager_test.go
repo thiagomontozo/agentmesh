@@ -379,6 +379,84 @@ func TestSequentialWorkflowUsesEngineRetry(t *testing.T) {
 	}
 }
 
+func TestWorkflowSchedulerOwnershipTransfersAfterLeaseExpiry(t *testing.T) {
+	repository := store.NewMemory()
+	if _, err := repository.CreateAgent(context.Background(), domain.Agent{ID: "agt_owner", Name: "owner"}); err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var calls atomic.Int32
+	runEngine := engine.New(repository, events.NewBus(), executorFunc(func(ctx context.Context, _ domain.Agent, input string) (string, error) {
+		if calls.Add(1) == 1 {
+			close(started)
+		}
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-release:
+			return input + ":done", nil
+		}
+	}), queue.NewMemory(8), coordination.NewMemory(), 1, engine.RetryPolicy{
+		MaxAttempts: 1, InitialBackoff: time.Millisecond, MaxBackoff: time.Millisecond, LeaseTTL: time.Minute, AttemptTimeout: time.Second,
+	})
+	engineCtx, stopEngine := context.WithCancel(context.Background())
+	runEngine.Start(engineCtx)
+	defer func() { stopEngine(); runEngine.Stop() }()
+
+	shared := coordination.NewMemory()
+	leaseTTL := 120 * time.Millisecond
+	owner := NewWithCoordinator(repository, runEngine, abandonedCoordinator{shared}, 1, leaseTTL)
+	ownerCtx, stopOwner := context.WithCancel(context.Background())
+	owner.Run(ownerCtx)
+	workflow, err := repository.CreateWorkflow(context.Background(), domain.Workflow{ID: "wf_owned", Steps: []domain.WorkflowStep{{ID: "step", AgentID: "agt_owner", Input: "work"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := owner.StartWorkflow(context.Background(), workflow.ID); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("owner did not schedule Workflow Run")
+	}
+
+	replacement := NewWithCoordinator(repository, runEngine, shared, 1, leaseTTL)
+	replacementCtx, stopReplacement := context.WithCancel(context.Background())
+	replacement.Run(replacementCtx)
+	defer func() { stopReplacement(); replacement.Stop() }()
+	stopOwner()
+	owner.Stop()
+	close(release)
+	time.Sleep(70 * time.Millisecond)
+	beforeExpiry, err := repository.GetWorkflow(context.Background(), workflow.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if beforeExpiry.IsTerminal() {
+		t.Fatalf("replacement reconciled before abandoned ownership expired: %+v", beforeExpiry)
+	}
+	completed := waitForWorkflow(t, repository, workflow.ID, domain.WorkflowSucceeded)
+	if completed.Steps[0].Output != "work:done" || calls.Load() != 1 {
+		t.Fatalf("scheduler takeover duplicated work: workflow=%+v calls=%d", completed, calls.Load())
+	}
+}
+
+type abandonedCoordinator struct{ coordination.Coordinator }
+
+func (c abandonedCoordinator) Acquire(ctx context.Context, key string, ttl time.Duration) (coordination.Lease, bool, error) {
+	lease, acquired, err := c.Coordinator.Acquire(ctx, key, ttl)
+	if err != nil || !acquired {
+		return lease, acquired, err
+	}
+	return abandonedLease{Lease: lease}, true, nil
+}
+
+type abandonedLease struct{ coordination.Lease }
+
+func (abandonedLease) Release(context.Context) error { return nil }
+
 func newWorkflowHarness(t *testing.T, executor engine.Executor) (*store.Memory, *engine.Engine, *Manager, func()) {
 	t.Helper()
 	repository := store.NewMemory()

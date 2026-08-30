@@ -26,7 +26,7 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.AgentHealthPath != "/healthz" || cfg.AgentHealthInterval != 30*time.Second ||
 		cfg.AgentHealthTimeout != 2*time.Second || cfg.AgentHealthWorkers != 2 || cfg.WorkflowConcurrency != 4 ||
-		cfg.AgentCallMaxDepth != 8 || cfg.AgentCallMaxChildren != 16 {
+		cfg.WorkflowLeaseTTL != 30*time.Second || cfg.AgentCallMaxDepth != 8 || cfg.AgentCallMaxChildren != 16 {
 		t.Fatalf("unexpected agent health defaults: %+v", cfg)
 	}
 	if cfg.HTTPRequireHTTPS || !cfg.HTTPAllowPrivate || !cfg.HTTPAllowLoopback || cfg.HTTPAllowLinkLocal ||
@@ -64,6 +64,7 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 		{name: "agent health timeout is zero", key: "AGENTMESH_AGENT_HEALTH_TIMEOUT", value: "0s"},
 		{name: "agent health workers is zero", key: "AGENTMESH_AGENT_HEALTH_WORKERS", value: "0"},
 		{name: "workflow concurrency is zero", key: "AGENTMESH_WORKFLOW_CONCURRENCY", value: "0"},
+		{name: "workflow lease is zero", key: "AGENTMESH_WORKFLOW_LEASE_TTL", value: "0s"},
 		{name: "Agent call depth is zero", key: "AGENTMESH_AGENT_CALL_MAX_DEPTH", value: "0"},
 		{name: "Agent call fan-out is zero", key: "AGENTMESH_AGENT_CALL_MAX_CHILDREN", value: "0"},
 		{name: "HTTP require HTTPS is invalid", key: "AGENTMESH_HTTP_REQUIRE_HTTPS", value: "sometimes"},
@@ -151,6 +152,7 @@ func clearEnvironment(t *testing.T) {
 		"AGENTMESH_AGENT_HEALTH_TIMEOUT",
 		"AGENTMESH_AGENT_HEALTH_WORKERS",
 		"AGENTMESH_WORKFLOW_CONCURRENCY",
+		"AGENTMESH_WORKFLOW_LEASE_TTL",
 		"AGENTMESH_AGENT_CALL_MAX_DEPTH",
 		"AGENTMESH_AGENT_CALL_MAX_CHILDREN",
 		"AGENTMESH_HTTP_REQUIRE_HTTPS",

@@ -5,7 +5,7 @@ AgentMesh supports three startup roles through `AGENTMESH_ROLE`:
 | Role | Responsibilities |
 | --- | --- |
 | `all` | Backward-compatible default: HTTP API, health checks, Workflow reconciliation, Run recovery, and Run workers |
-| `api` | HTTP API, SSE, health checks, Workflow reconciliation, queue producer, and persisted cancellation; no Run consumer or Run recovery |
+| `api` | HTTP API, SSE, health checks, lease-coordinated Workflow reconciliation, queue producer, and persisted cancellation; no Run consumer or Run recovery |
 | `worker` | Run recovery and queue consumption; no public HTTP listener, Agent health probes, or Workflow reconciliation |
 
 Split roles require `AGENTMESH_MODE=distributed`. Memory mode rejects `api` and
@@ -23,6 +23,10 @@ Both processes must point to the same PostgreSQL, Redis, and NATS services. API
 readiness continues at `/readyz`. A worker intentionally has no HTTP listener;
 its process supervisor supplies liveness and its structured startup/error logs
 report dependency or consumer failure.
+
+Multiple API replicas may scan the same running Workflows; a renewable Redis
+lease selects one reconciler per Workflow. See
+[Workflow scheduler ownership](workflow-scheduler-ownership.md).
 
 ## Process-level acceptance test
 

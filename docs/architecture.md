@@ -196,6 +196,12 @@ The initial partial-failure policy is fail-fast: one failed/canceled branch make
 
 Workflow and Step transition events are stored in Memory or the bounded PostgreSQL `workflow_events` table. The Workflow SSE endpoint polls this authoritative history, which makes events visible across API replicas without adding a second NATS subject. Polling and client writes are outside execution goroutines, so a slow SSE client cannot block Workflow progress.
 
+Every API-capable replica scans running Workflows, but only the holder of the
+renewable `workflow:{id}` coordination lease reconciles one. A lost lease cancels
+that scheduler context; another replica takes over after TTL and reuses stable
+Step idempotency keys. See
+[Workflow scheduler ownership](workflow-scheduler-ownership.md).
+
 ## Deterministic conditions and branching
 
 A Step may declare one optional condition with a source, controlled operator, and literal comparison value. The source is either `workflow` or one of the Step's declared dependencies. Supported operators are `equals`, `not-equals`, `contains`, and `not-contains`; comparisons are case-sensitive and operate on the complete persisted string. There is no expression parser, `eval`, regex engine, user code, or implicit type coercion.

@@ -95,6 +95,7 @@ The Engine resolves the already-selected Agent's runtime through a concurrency-s
 - Load-aware routing by active Runs, declared capacity, and deterministic priority
 - Immutable parent/root Run lineage with direct-child lookup and events
 - Persisted Workflow V1 DAG definitions with explicit input sources
+- Renewable per-Workflow scheduler ownership with replica takeover after TTL
 - Bounded Workflow DAG execution with sequential, fan-out, and fan-in Steps
 - Deterministic Workflow conditions and branching without `eval`
 - Control-plane-mediated Agent-to-Agent child Runs with bounded depth and fan-out
@@ -179,6 +180,7 @@ With the server running in one terminal:
 | `AGENTMESH_ROLE` | `all` | `all`, `api`, or `worker`; split roles require distributed mode |
 | `AGENTMESH_WORKERS` | `4` | Worker goroutines |
 | `AGENTMESH_WORKFLOW_CONCURRENCY` | `4` | Maximum active Steps per Workflow |
+| `AGENTMESH_WORKFLOW_LEASE_TTL` | `30s` | Renewable per-Workflow scheduler ownership TTL |
 | `AGENTMESH_AGENT_CALL_MAX_DEPTH` | `8` | Maximum Agent-to-Agent ancestry depth |
 | `AGENTMESH_AGENT_CALL_MAX_CHILDREN` | `16` | Maximum direct Agent-call children per parent Run |
 | `AGENTMESH_QUEUE_SIZE` | `128` | In-memory run queue capacity |
@@ -261,6 +263,7 @@ docs/                   roadmap and architecture notes
 - [Multi-replica integration test](docs/multi-replica-testing.md)
 - [API and Worker separation analysis](docs/api-worker-separation-analysis.md)
 - [Process roles and process-level replica test](docs/process-roles.md)
+- [Workflow scheduler ownership](docs/workflow-scheduler-ownership.md)
 - [HTTP Runtime security](docs/http-runtime-security.md)
 - [Agent request authentication](docs/agent-authentication.md)
 - [Agent Protocol versioning](docs/protocol-versioning.md)

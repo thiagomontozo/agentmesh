@@ -85,8 +85,8 @@ Level 7 claim.
    cross-replica SSE, idempotency, lease/fence behavior, and DLQ.
 2. ~~Add distributed Run cancellation signaling.~~ Resolved by per-Run event
    subscription with persisted polling fallback and a process-level test.
-3. Define and enforce Workflow scheduler ownership before independently scaling
-   API, workers, or scheduler processes.
+3. ~~Define and enforce Workflow scheduler ownership.~~ Resolved with renewable
+   per-Workflow coordination leases, periodic recovery scans, and takeover tests.
 4. Require and test Agent Protocol idempotency for irreversible external effects;
    fencing protects AgentMesh state but cannot retract an Agent side effect.
 
