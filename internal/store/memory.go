@@ -20,6 +20,7 @@ type Memory struct {
 	runFences       map[string]int64
 	runEvents       map[string][]domain.RunEvent
 	idempotencyKeys map[string]string
+	workflows       map[string]domain.Workflow
 }
 
 var _ Repository = (*Memory)(nil)
@@ -31,7 +32,52 @@ func NewMemory() *Memory {
 		runFences:       make(map[string]int64),
 		runEvents:       make(map[string][]domain.RunEvent),
 		idempotencyKeys: make(map[string]string),
+		workflows:       make(map[string]domain.Workflow),
 	}
+}
+
+func (m *Memory) CreateWorkflow(_ context.Context, workflow domain.Workflow) (domain.Workflow, error) {
+	if err := workflow.InitializeForCreate(time.Now()); err != nil {
+		return domain.Workflow{}, err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, exists := m.workflows[workflow.ID]; exists {
+		return domain.Workflow{}, ErrConflict
+	}
+	for _, step := range workflow.Steps {
+		if _, exists := m.agents[step.AgentID]; !exists {
+			return domain.Workflow{}, fmt.Errorf("agent %s: %w", step.AgentID, ErrNotFound)
+		}
+	}
+	m.workflows[workflow.ID] = cloneWorkflow(workflow)
+	return cloneWorkflow(workflow), nil
+}
+
+func (m *Memory) GetWorkflow(_ context.Context, id string) (domain.Workflow, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	workflow, exists := m.workflows[id]
+	if !exists {
+		return domain.Workflow{}, ErrNotFound
+	}
+	return cloneWorkflow(workflow), nil
+}
+
+func (m *Memory) ListWorkflows(_ context.Context) ([]domain.Workflow, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	result := make([]domain.Workflow, 0, len(m.workflows))
+	for _, workflow := range m.workflows {
+		result = append(result, cloneWorkflow(workflow))
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].CreatedAt.Equal(result[j].CreatedAt) {
+			return result[i].ID < result[j].ID
+		}
+		return result[i].CreatedAt.Before(result[j].CreatedAt)
+	})
+	return result, nil
 }
 
 func (m *Memory) AppendRunEvent(_ context.Context, event domain.RunEvent, retention time.Duration, maxPerRun int) error {
@@ -115,6 +161,13 @@ func (m *Memory) DeleteAgent(_ context.Context, id string, expectedVersion int64
 	for _, run := range m.runs {
 		if run.AgentID == id {
 			return ErrAgentInUse
+		}
+	}
+	for _, workflow := range m.workflows {
+		for _, step := range workflow.Steps {
+			if step.AgentID == id {
+				return ErrAgentInUse
+			}
 		}
 	}
 	delete(m.agents, id)
@@ -413,4 +466,13 @@ func cloneAgent(agent domain.Agent) domain.Agent {
 func cloneRun(run domain.Run) domain.Run {
 	run.RequiredCapabilities = append([]string(nil), run.RequiredCapabilities...)
 	return run
+}
+
+func cloneWorkflow(workflow domain.Workflow) domain.Workflow {
+	workflow.Steps = append([]domain.WorkflowStep(nil), workflow.Steps...)
+	for index := range workflow.Steps {
+		workflow.Steps[index].DependsOn = append([]string(nil), workflow.Steps[index].DependsOn...)
+		workflow.Steps[index].InputFrom = append([]string(nil), workflow.Steps[index].InputFrom...)
+	}
+	return workflow
 }

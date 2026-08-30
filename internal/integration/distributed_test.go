@@ -331,6 +331,43 @@ func TestDistributedRunLifecycleAndIdempotency(t *testing.T) {
 	testDistributedSSE(t, natsURL, repository, runEngine, agent.ID, suffix)
 }
 
+func TestPostgreSQLWorkflowDefinitionPersistence(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	repository, err := postgresstore.New(ctx, env("AGENTMESH_DATABASE_URL", "postgres://agentmesh:agentmesh@localhost:5432/agentmesh?sslmode=disable"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.Close()
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	for _, id := range []string{"agt_wf_a_" + suffix, "agt_wf_b_" + suffix} {
+		if _, err := repository.CreateAgent(ctx, domain.Agent{ID: id, Name: id}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want, err := repository.CreateWorkflow(ctx, domain.Workflow{ID: "wf_" + suffix, Input: "document", Steps: []domain.WorkflowStep{
+		{ID: "extract", AgentID: "agt_wf_a_" + suffix, InputFrom: []string{"workflow"}},
+		{ID: "review", AgentID: "agt_wf_b_" + suffix, DependsOn: []string{"extract"}, InputFrom: []string{"extract"}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := repository.GetWorkflow(ctx, want.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != domain.WorkflowPending || len(got.Steps) != 2 || !slices.Equal(got.Steps[1].DependsOn, []string{"extract"}) {
+		t.Fatalf("unexpected PostgreSQL Workflow: %+v", got)
+	}
+	listed, err := repository.ListWorkflows(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(listed, func(candidate domain.Workflow) bool { return candidate.ID == want.ID }) {
+		t.Fatalf("created Workflow was not listed: %s", want.ID)
+	}
+}
+
 func testDistributedSSE(
 	t *testing.T,
 	natsURL string,

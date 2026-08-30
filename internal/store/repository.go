@@ -55,9 +55,16 @@ type EventRepository interface {
 	ListRunEvents(ctx context.Context, runID string, limit int) ([]domain.RunEvent, error)
 }
 
+type WorkflowRepository interface {
+	CreateWorkflow(ctx context.Context, workflow domain.Workflow) (domain.Workflow, error)
+	GetWorkflow(ctx context.Context, id string) (domain.Workflow, error)
+	ListWorkflows(ctx context.Context) ([]domain.Workflow, error)
+}
+
 type Repository interface {
 	AgentRepository
 	RunRepository
 	EventRepository
+	WorkflowRepository
 	Ping(ctx context.Context) error
 }

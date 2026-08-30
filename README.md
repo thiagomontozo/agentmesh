@@ -87,6 +87,7 @@ The Engine resolves the already-selected Agent's runtime through a concurrency-s
 - Deterministic capability Router with health exclusion and explicit unknown fallback
 - Load-aware routing by active Runs, declared capacity, and deterministic priority
 - Immutable parent/root Run lineage with direct-child lookup and events
+- Persisted Workflow V1 DAG definitions with explicit input sources
 - Restart recovery for queued/running work
 
 ## API
@@ -107,6 +108,9 @@ The Engine resolves the already-selected Agent's runtime through a concurrency-s
 | `GET` | `/api/v1/runs/{id}/children` | List direct child Runs |
 | `POST` | `/api/v1/runs/{id}/cancel` | Cancel a queued or running Run |
 | `GET` | `/api/v1/runs/{id}/events` | Stream lifecycle events via SSE |
+| `POST` | `/api/v1/workflows` | Create a validated Workflow DAG definition |
+| `GET` | `/api/v1/workflows` | List Workflow definitions |
+| `GET` | `/api/v1/workflows/{id}` | Get a Workflow definition |
 
 ## Run locally
 

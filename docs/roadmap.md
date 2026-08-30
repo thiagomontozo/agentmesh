@@ -49,6 +49,9 @@
 - [x] Load-aware Router ranking with declared capacity and priority
 - [x] Semantic/LLM Router architectural analysis (no implementation)
 - [x] Immutable parent/root Run lineage and direct-child queries
+- [x] Persisted Workflow V1 DAG model and definition API
+- [ ] Sequential Workflow execution through Runs
+- [ ] Workflow fan-out/fan-in execution
 - [ ] Authentication
 - [ ] RBAC
 - [ ] Audit log
