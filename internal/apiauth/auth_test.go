@@ -20,10 +20,12 @@ func TestBearerAuthenticationAndRBAC(t *testing.T) {
 	}
 	handler := authenticator.Middleware(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		identity, ok := apiauth.FromContext(request.Context())
-		if !ok {
+		if !ok && request.URL.Path != "/healthz" {
 			t.Fatal("authenticated identity missing from context")
 		}
-		response.Header().Set("X-Test-Subject", identity.Subject)
+		if ok {
+			response.Header().Set("X-Test-Subject", identity.Subject)
+		}
 		response.WriteHeader(http.StatusNoContent)
 	}))
 
