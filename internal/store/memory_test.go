@@ -202,7 +202,7 @@ func TestMemoryPersistsAgentExecutionMetadata(t *testing.T) {
 	memory := NewMemory()
 	agent := domain.Agent{
 		ID: "agt_remote", Name: "legal", Runtime: "remote", Protocol: "http",
-		Endpoint: "http://legal-agent:9000", Capabilities: []string{"legal-search", "legal-analysis"},
+		Endpoint: "http://legal-agent:9000", Model: "legal-model-v1", Capabilities: []string{"legal-search", "legal-analysis"},
 		EffectIdempotency: domain.EffectIdempotencyRequired,
 		CreatedAt:         time.Now().UTC(),
 	}
@@ -214,7 +214,7 @@ func TestMemoryPersistsAgentExecutionMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.Runtime != created.Runtime || loaded.Protocol != created.Protocol || loaded.Endpoint != created.Endpoint {
+	if loaded.Runtime != created.Runtime || loaded.Protocol != created.Protocol || loaded.Endpoint != created.Endpoint || loaded.Model != created.Model {
 		t.Fatalf("execution metadata was not preserved: %+v", loaded)
 	}
 	if loaded.EffectIdempotency != domain.EffectIdempotencyRequired {

@@ -466,6 +466,7 @@ func TestCreateAgentWithExecutionMetadataAndList(t *testing.T) {
 		"runtime":"REMOTE",
 		"protocol":"HTTP",
 		"endpoint":"http://legal-agent:9000",
+		"model":"legal-model-v1",
 		"capabilities":["legal-search","legal-analysis","summarization"],
 		"effect_idempotency":"required",
 		"max_concurrency":8,
@@ -482,7 +483,7 @@ func TestCreateAgentWithExecutionMetadataAndList(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &created); err != nil {
 		t.Fatal(err)
 	}
-	if created.Runtime != "remote" || created.Protocol != "http" || created.Endpoint != "http://legal-agent:9000" {
+	if created.Runtime != "remote" || created.Protocol != "http" || created.Endpoint != "http://legal-agent:9000" || created.Model != "legal-model-v1" {
 		t.Fatalf("unexpected created agent: %+v", created)
 	}
 	if len(created.Capabilities) != 3 || created.Capabilities[0] != "legal-search" {
@@ -499,6 +500,7 @@ func TestCreateAgentWithExecutionMetadataAndList(t *testing.T) {
 	getResponse := httptest.NewRecorder()
 	server.Handler().ServeHTTP(getResponse, getRequest)
 	if getResponse.Code != http.StatusOK || !strings.Contains(getResponse.Body.String(), `"runtime":"remote"`) ||
+		!strings.Contains(getResponse.Body.String(), `"model":"legal-model-v1"`) ||
 		!strings.Contains(getResponse.Body.String(), `"effect_idempotency":"required"`) {
 		t.Fatalf("unexpected get response: %d %s", getResponse.Code, getResponse.Body.String())
 	}
@@ -837,7 +839,7 @@ func TestAgentUpdateDeleteAndConcurrencyAPI(t *testing.T) {
 	}
 	updateBody := `{
 		"name":"updated","system_prompt":"new prompt","runtime":"remote","protocol":"http",
-		"endpoint":"http://agent:9000","capabilities":["testing","debugging"],
+		"endpoint":"http://agent:9000","model":"code-model-v1","capabilities":["testing","debugging"],
 		"max_concurrency":3,"priority":10
 	}`
 	updateRequest := httptest.NewRequest(http.MethodPut, "/api/v1/agents/"+created.ID, strings.NewReader(updateBody))
@@ -852,7 +854,7 @@ func TestAgentUpdateDeleteAndConcurrencyAPI(t *testing.T) {
 		t.Fatal(err)
 	}
 	if updated.Version != 2 || updated.Name != "updated" || !updated.CreatedAt.Equal(created.CreatedAt) ||
-		len(updated.Capabilities) != 2 || updated.MaxConcurrency != 3 || updated.Priority != 10 ||
+		len(updated.Capabilities) != 2 || updated.Model != "code-model-v1" || updated.MaxConcurrency != 3 || updated.Priority != 10 ||
 		updated.UpdatedAt.Before(created.UpdatedAt) {
 		t.Fatalf("unexpected updated Agent: %+v", updated)
 	}
@@ -971,6 +973,7 @@ func TestCreateAgentRejectsInvalidExecutionMetadata(t *testing.T) {
 		`{"name":"invalid","protocol":"http"}`,
 		`{"name":"invalid","runtime":"remote","endpoint":"http://agent:9000"}`,
 		`{"name":"invalid","runtime":"remote","protocol":"http","endpoint":"/v1/runs"}`,
+		`{"name":"invalid","model":"model-without-runtime"}`,
 		`{"name":"invalid","capabilities":["testing",""]}`,
 		`{"name":"invalid","max_concurrency":-1}`,
 		`{"name":"invalid","priority":1001}`,

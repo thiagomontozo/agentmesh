@@ -70,6 +70,12 @@ Each runtime attempt runs synchronously under a child context bounded by `AGENTM
 
 `Runtime.Execute` is also a panic boundary. A recovered panic becomes an explicit execution error, follows the existing retry/dead-letter lifecycle, and cannot terminate the process or the consuming worker. The structured error log includes Run ID, Agent ID, attempt, panic value, and stack trace. Queue handlers do not currently propagate worker identity to the Engine, so `worker_id` is not yet available at this boundary. Lease release and queue semaphore cleanup remain protected by their existing defers outside the runtime call.
 
+`internal/llm` adds a provider contract and concurrency-safe provider registry.
+The `llm` Runtime resolves the already-selected Agent's protocol and currently
+supports an OpenAI-compatible Chat Completions provider. Provider HTTP calls
+reuse the remote Runtime's secure client policy, outbound credential resolver,
+attempt context, and response bounds; Engine remains provider-agnostic.
+
 ## Run cancellation
 
 `POST /api/v1/runs/{id}/cancel` atomically moves a queued or running Run to `canceled`. The Engine keeps cancel functions only for active executions in its own process, so local runtime contexts—including outbound HTTP requests—are interrupted immediately and retry backoff stops. Queued messages are not removed from the queue; consumers acknowledge them without execution after observing the terminal state.

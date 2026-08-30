@@ -21,6 +21,7 @@ import (
 	"github.com/thiagomontozo/agentmesh/internal/engine"
 	"github.com/thiagomontozo/agentmesh/internal/events"
 	"github.com/thiagomontozo/agentmesh/internal/httpapi"
+	"github.com/thiagomontozo/agentmesh/internal/llm"
 	metricspkg "github.com/thiagomontozo/agentmesh/internal/metrics"
 	"github.com/thiagomontozo/agentmesh/internal/queue"
 	agentruntime "github.com/thiagomontozo/agentmesh/internal/runtime"
@@ -106,13 +107,14 @@ func main() {
 		logger.Error("Agent authentication configuration failed", "error", err)
 		os.Exit(1)
 	}
+	httpPolicy := agentruntime.HTTPPolicy{
+		RequireHTTPS: cfg.HTTPRequireHTTPS, AllowPrivate: cfg.HTTPAllowPrivate,
+		AllowLoopback: cfg.HTTPAllowLoopback, AllowLinkLocal: cfg.HTTPAllowLinkLocal,
+		AllowedHosts: cfg.HTTPAllowedHosts, BlockedCIDRs: cfg.HTTPBlockedCIDRs,
+	}
 	httpRuntime, err := agentruntime.NewSecureHTTPRuntime(&http.Client{Timeout: cfg.AttemptTimeout}, agentruntime.HTTPOptions{
 		MaxRequestBytes: cfg.HTTPMaxRequestBytes, MaxResponseBytes: cfg.HTTPMaxResponseBytes,
-		Policy: agentruntime.HTTPPolicy{
-			RequireHTTPS: cfg.HTTPRequireHTTPS, AllowPrivate: cfg.HTTPAllowPrivate,
-			AllowLoopback: cfg.HTTPAllowLoopback, AllowLinkLocal: cfg.HTTPAllowLinkLocal,
-			AllowedHosts: cfg.HTTPAllowedHosts, BlockedCIDRs: cfg.HTTPBlockedCIDRs,
-		},
+		Policy:        httpPolicy,
 		Authenticator: authenticator,
 	})
 	if err != nil {
@@ -124,6 +126,22 @@ func main() {
 		httpRuntime,
 	); err != nil {
 		logger.Error("HTTP runtime registration failed", "error", err)
+		os.Exit(1)
+	}
+	llmClient, err := agentruntime.NewSecureHTTPClient(&http.Client{Timeout: cfg.AttemptTimeout}, httpPolicy)
+	if err != nil {
+		logger.Error("LLM HTTP client security configuration failed", "error", err)
+		os.Exit(1)
+	}
+	llmProviders := llm.NewRegistry()
+	if err := llmProviders.Register(llm.OpenAIProtocol, llm.NewOpenAICompatible(
+		llmClient, cfg.HTTPMaxRequestBytes, cfg.HTTPMaxResponseBytes, authenticator,
+	)); err != nil {
+		logger.Error("OpenAI-compatible provider registration failed", "error", err)
+		os.Exit(1)
+	}
+	if err := runtimeResolver.Register(agentruntime.LLMRuntimeName, agentruntime.NewLLMRuntime(llmProviders)); err != nil {
+		logger.Error("LLM runtime registration failed", "error", err)
 		os.Exit(1)
 	}
 	runEngine := engine.NewWithResolver(repository, eventBus, runtimeResolver, runQueue, coordinator, cfg.Workers, engine.RetryPolicy{

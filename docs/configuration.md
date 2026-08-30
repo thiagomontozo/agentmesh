@@ -84,6 +84,14 @@ supports mounted-secret rotation without restart. No secret is stored in
 AgentMesh persistence or returned through its API. See
 [Agent request authentication](agent-authentication.md).
 
+## LLM Agents
+
+An LLM Agent declares `runtime: "llm"`, `protocol: "openai"`, an HTTP(S)
+endpoint base, and a non-empty `model`. The OpenAI-compatible provider calls
+Chat Completions through the same timeout, SSRF policy, response-size limit, and
+request-time credential resolver as the remote HTTP Runtime. See
+[LLM providers](llm-providers.md).
+
 `AGENTMESH_API_AUTH_CONFIG` enables inbound Bearer authentication and RBAC using
 environment-variable token references. Empty preserves the legacy unauthenticated
 API. `AGENTMESH_AUDIT_RETENTION` and `AGENTMESH_AUDIT_MAX_EVENTS` bound the

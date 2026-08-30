@@ -331,6 +331,7 @@ type createAgentRequest struct {
 	Runtime           string   `json:"runtime"`
 	Protocol          string   `json:"protocol"`
 	Endpoint          string   `json:"endpoint"`
+	Model             string   `json:"model"`
 	Capabilities      []string `json:"capabilities"`
 	EffectIdempotency string   `json:"effect_idempotency"`
 	MaxConcurrency    int      `json:"max_concurrency"`
@@ -351,6 +352,7 @@ func (s *Server) createAgent(w http.ResponseWriter, r *http.Request) {
 		Runtime:           request.Runtime,
 		Protocol:          request.Protocol,
 		Endpoint:          request.Endpoint,
+		Model:             request.Model,
 		Capabilities:      request.Capabilities,
 		EffectIdempotency: request.EffectIdempotency,
 		MaxConcurrency:    request.MaxConcurrency,
@@ -480,6 +482,7 @@ func (s *Server) updateAgent(w http.ResponseWriter, r *http.Request) {
 	agent := domain.Agent{
 		ID: id, Name: request.Name, SystemPrompt: request.SystemPrompt,
 		Runtime: request.Runtime, Protocol: request.Protocol, Endpoint: request.Endpoint,
+		Model:             request.Model,
 		Capabilities:      request.Capabilities,
 		EffectIdempotency: request.EffectIdempotency,
 		MaxConcurrency:    request.MaxConcurrency,

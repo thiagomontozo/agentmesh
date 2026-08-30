@@ -14,6 +14,7 @@ type Agent struct {
 	Runtime           string    `json:"runtime,omitempty"`
 	Protocol          string    `json:"protocol,omitempty"`
 	Endpoint          string    `json:"endpoint,omitempty"`
+	Model             string    `json:"model,omitempty"`
 	Capabilities      []string  `json:"capabilities,omitempty"`
 	EffectIdempotency string    `json:"effect_idempotency,omitempty"`
 	MaxConcurrency    int       `json:"max_concurrency,omitempty"`
@@ -56,6 +57,7 @@ func (a *Agent) NormalizeAndValidate() error {
 	a.Runtime = strings.ToLower(strings.TrimSpace(a.Runtime))
 	a.Protocol = strings.ToLower(strings.TrimSpace(a.Protocol))
 	a.Endpoint = strings.TrimSpace(a.Endpoint)
+	a.Model = strings.TrimSpace(a.Model)
 	a.EffectIdempotency = strings.ToLower(strings.TrimSpace(a.EffectIdempotency))
 
 	if a.ID == "" {
@@ -81,6 +83,9 @@ func (a *Agent) NormalizeAndValidate() error {
 		if err != nil || parsed.Scheme == "" || (parsed.Host == "" && parsed.Opaque == "" && parsed.Path == "") {
 			return fmt.Errorf("endpoint must be an absolute URI")
 		}
+	}
+	if a.Model != "" && (a.Runtime == "" || a.Protocol == "") {
+		return fmt.Errorf("model requires runtime and protocol")
 	}
 	if a.EffectIdempotency != "" && a.EffectIdempotency != EffectIdempotencyRequired {
 		return fmt.Errorf("effect_idempotency must be empty or %q", EffectIdempotencyRequired)
