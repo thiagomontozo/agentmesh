@@ -3,6 +3,7 @@ package runtime
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"mime"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strings"
 	"time"
@@ -21,8 +23,34 @@ const (
 	RemoteRuntime           = "remote"
 	HTTPProtocol            = "http"
 	DefaultHTTPTimeout      = 30 * time.Second
+	DefaultMaxRequestBytes  = int64(1 << 20)
 	DefaultMaxResponseBytes = int64(1 << 20)
 )
+
+var ErrHTTPNetworkPolicy = errors.New("HTTP runtime network policy denied endpoint")
+
+// HTTPPolicy controls the network destinations available to remote Agents.
+// Private and loopback destinations remain allowed by default because the
+// control plane is designed to call internal services. Link-local destinations,
+// including common cloud metadata endpoints, are denied by default.
+type HTTPPolicy struct {
+	RequireHTTPS   bool
+	AllowPrivate   bool
+	AllowLoopback  bool
+	AllowLinkLocal bool
+	AllowedHosts   []string
+	BlockedCIDRs   []netip.Prefix
+}
+
+func DefaultHTTPPolicy() HTTPPolicy {
+	return HTTPPolicy{AllowPrivate: true, AllowLoopback: true}
+}
+
+type HTTPOptions struct {
+	MaxRequestBytes  int64
+	MaxResponseBytes int64
+	Policy           HTTPPolicy
+}
 
 type HTTPErrorKind string
 
@@ -73,12 +101,25 @@ func (e *HTTPError) Retryable() bool {
 
 type HTTPRuntime struct {
 	client           *http.Client
+	maxRequestBytes  int64
 	maxResponseBytes int64
+	policy           HTTPPolicy
 }
 
 // NewHTTPRuntime clones the supplied client and always disables redirects. A
 // nil client and non-positive response limit select conservative defaults.
 func NewHTTPRuntime(client *http.Client, maxResponseBytes int64) *HTTPRuntime {
+	runtime, _ := newHTTPRuntime(client, HTTPOptions{MaxResponseBytes: maxResponseBytes, Policy: DefaultHTTPPolicy()}, false)
+	return runtime
+}
+
+// NewSecureHTTPRuntime creates the production HTTP runtime. It rejects custom
+// RoundTrippers that cannot be wrapped with destination checks.
+func NewSecureHTTPRuntime(client *http.Client, options HTTPOptions) (*HTTPRuntime, error) {
+	return newHTTPRuntime(client, options, true)
+}
+
+func newHTTPRuntime(client *http.Client, options HTTPOptions, requirePolicyTransport bool) (*HTTPRuntime, error) {
 	if client == nil {
 		client = &http.Client{Timeout: DefaultHTTPTimeout}
 	}
@@ -86,17 +127,37 @@ func NewHTTPRuntime(client *http.Client, maxResponseBytes int64) *HTTPRuntime {
 	clientCopy.CheckRedirect = func(*http.Request, []*http.Request) error {
 		return http.ErrUseLastResponse
 	}
-	if maxResponseBytes <= 0 {
-		maxResponseBytes = DefaultMaxResponseBytes
+	if options.MaxRequestBytes <= 0 {
+		options.MaxRequestBytes = DefaultMaxRequestBytes
 	}
-	return &HTTPRuntime{client: &clientCopy, maxResponseBytes: maxResponseBytes}
+	if options.MaxResponseBytes <= 0 {
+		options.MaxResponseBytes = DefaultMaxResponseBytes
+	}
+	if err := normalizeHTTPPolicy(&options.Policy); err != nil {
+		return nil, err
+	}
+	transport, ok := clientCopy.Transport.(*http.Transport)
+	if clientCopy.Transport == nil {
+		transport = http.DefaultTransport.(*http.Transport)
+		ok = true
+	}
+	if ok {
+		transport = secureTransport(transport, options.Policy)
+		clientCopy.Transport = transport
+	} else if requirePolicyTransport {
+		return nil, fmt.Errorf("secure HTTP runtime requires *http.Transport")
+	}
+	return &HTTPRuntime{
+		client: &clientCopy, maxRequestBytes: options.MaxRequestBytes,
+		maxResponseBytes: options.MaxResponseBytes, policy: options.Policy,
+	}, nil
 }
 
 func (h *HTTPRuntime) Execute(ctx context.Context, request ExecutionRequest) (ExecutionResult, error) {
 	if strings.ToLower(strings.TrimSpace(request.Agent.Protocol)) != HTTPProtocol {
 		return ExecutionResult{}, protocolError("agent protocol must be %q", HTTPProtocol)
 	}
-	executionURL, err := remoteExecutionURL(request.Agent.Endpoint)
+	executionURL, err := remoteExecutionURL(request.Agent.Endpoint, h.policy)
 	if err != nil {
 		return ExecutionResult{}, &HTTPError{Kind: HTTPErrorPermanent, Err: err}
 	}
@@ -116,6 +177,9 @@ func (h *HTTPRuntime) Execute(ctx context.Context, request ExecutionRequest) (Ex
 	if err != nil {
 		return ExecutionResult{}, &HTTPError{Kind: HTTPErrorProtocol, Err: fmt.Errorf("encode request: %w", err)}
 	}
+	if int64(len(payload)) > h.maxRequestBytes {
+		return ExecutionResult{}, protocolError("request exceeds %d bytes", h.maxRequestBytes)
+	}
 
 	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, executionURL, bytes.NewReader(payload))
 	if err != nil {
@@ -123,6 +187,7 @@ func (h *HTTPRuntime) Execute(ctx context.Context, request ExecutionRequest) (Ex
 	}
 	httpRequest.Header.Set("Content-Type", "application/json")
 	httpRequest.Header.Set("Accept", "application/json")
+	httpRequest.Header.Set("Accept-Encoding", "identity")
 	httpRequest.Header.Set("Idempotency-Key", wireRequest.IdempotencyKey)
 
 	response, err := h.client.Do(httpRequest)
@@ -130,6 +195,9 @@ func (h *HTTPRuntime) Execute(ctx context.Context, request ExecutionRequest) (Ex
 		return ExecutionResult{}, classifyTransportError(ctx, err)
 	}
 	defer response.Body.Close()
+	if encoding := strings.ToLower(strings.TrimSpace(response.Header.Get("Content-Encoding"))); encoding != "" && encoding != "identity" {
+		return ExecutionResult{}, protocolError("response Content-Encoding %q is not supported", encoding)
+	}
 
 	responsePayload, err := io.ReadAll(io.LimitReader(response.Body, h.maxResponseBytes+1))
 	if err != nil {
@@ -171,7 +239,7 @@ func (h *HTTPRuntime) Execute(ctx context.Context, request ExecutionRequest) (Ex
 	return ExecutionResult{Output: wireResponse.Output}, nil
 }
 
-func remoteExecutionURL(endpoint string) (string, error) {
+func remoteExecutionURL(endpoint string, policy HTTPPolicy) (string, error) {
 	parsed, err := url.Parse(strings.TrimSpace(endpoint))
 	if err != nil {
 		return "", fmt.Errorf("invalid agent endpoint: %w", err)
@@ -179,6 +247,9 @@ func remoteExecutionURL(endpoint string) (string, error) {
 	parsed.Scheme = strings.ToLower(parsed.Scheme)
 	if parsed.Scheme != "http" && parsed.Scheme != "https" {
 		return "", fmt.Errorf("agent endpoint must use http or https")
+	}
+	if policy.RequireHTTPS && parsed.Scheme != "https" {
+		return "", fmt.Errorf("%w: endpoint must use https", ErrHTTPNetworkPolicy)
 	}
 	if parsed.Host == "" {
 		return "", fmt.Errorf("agent endpoint must be absolute")
@@ -188,6 +259,9 @@ func remoteExecutionURL(endpoint string) (string, error) {
 	}
 	if parsed.RawQuery != "" || parsed.Fragment != "" {
 		return "", fmt.Errorf("agent endpoint cannot contain query or fragment")
+	}
+	if err := policy.validateHost(parsed.Hostname()); err != nil {
+		return "", err
 	}
 	joined, err := url.JoinPath(parsed.String(), "v1/runs")
 	if err != nil {
@@ -211,11 +285,133 @@ func classifyTransportError(ctx context.Context, err error) error {
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) {
 		return &HTTPError{Kind: HTTPErrorTimeout, Err: err}
 	}
+	if errors.Is(err, ErrHTTPNetworkPolicy) {
+		return &HTTPError{Kind: HTTPErrorPermanent, Err: ErrHTTPNetworkPolicy}
+	}
 	var networkError net.Error
 	if errors.As(err, &networkError) && networkError.Timeout() {
 		return &HTTPError{Kind: HTTPErrorTimeout, Err: err}
 	}
 	return &HTTPError{Kind: HTTPErrorTemporary, Err: err}
+}
+
+func normalizeHTTPPolicy(policy *HTTPPolicy) error {
+	for index, host := range policy.AllowedHosts {
+		host = strings.ToLower(strings.TrimSpace(host))
+		if strings.HasPrefix(host, "*.") {
+			host = strings.TrimPrefix(host, "*.")
+			if host == "" {
+				return fmt.Errorf("allowed host wildcard requires a suffix")
+			}
+			policy.AllowedHosts[index] = "*." + host
+		} else {
+			policy.AllowedHosts[index] = host
+		}
+		if host == "" || strings.ContainsAny(host, "/:@?# \\") {
+			return fmt.Errorf("invalid allowed host %q", host)
+		}
+	}
+	for index, prefix := range policy.BlockedCIDRs {
+		if !prefix.IsValid() {
+			return fmt.Errorf("invalid blocked CIDR at index %d", index)
+		}
+		policy.BlockedCIDRs[index] = prefix.Masked()
+	}
+	return nil
+}
+
+func (policy HTTPPolicy) validateHost(host string) error {
+	host = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
+	if host == "" {
+		return fmt.Errorf("%w: endpoint hostname is empty", ErrHTTPNetworkPolicy)
+	}
+	if len(policy.AllowedHosts) > 0 && !hostAllowed(host, policy.AllowedHosts) {
+		return fmt.Errorf("%w: hostname is not allowed", ErrHTTPNetworkPolicy)
+	}
+	if address, err := netip.ParseAddr(host); err == nil {
+		return policy.validateAddress(address)
+	}
+	return nil
+}
+
+func hostAllowed(host string, allowed []string) bool {
+	for _, candidate := range allowed {
+		if strings.HasPrefix(candidate, "*.") {
+			suffix := strings.TrimPrefix(candidate, "*")
+			if strings.HasSuffix(host, suffix) && host != strings.TrimPrefix(suffix, ".") {
+				return true
+			}
+		} else if host == candidate {
+			return true
+		}
+	}
+	return false
+}
+
+func (policy HTTPPolicy) validateAddress(address netip.Addr) error {
+	address = address.Unmap()
+	for _, prefix := range policy.BlockedCIDRs {
+		if prefix.Contains(address) {
+			return fmt.Errorf("%w: address is in a blocked CIDR", ErrHTTPNetworkPolicy)
+		}
+	}
+	if address.IsLinkLocalUnicast() || address.IsLinkLocalMulticast() {
+		if !policy.AllowLinkLocal {
+			return fmt.Errorf("%w: link-local address is disabled", ErrHTTPNetworkPolicy)
+		}
+	}
+	if address.IsLoopback() && !policy.AllowLoopback {
+		return fmt.Errorf("%w: loopback address is disabled", ErrHTTPNetworkPolicy)
+	}
+	if address.IsPrivate() && !policy.AllowPrivate {
+		return fmt.Errorf("%w: private address is disabled", ErrHTTPNetworkPolicy)
+	}
+	return nil
+}
+
+func secureTransport(base *http.Transport, policy HTTPPolicy) *http.Transport {
+	transport := base.Clone()
+	transport.Proxy = nil
+	transport.DisableCompression = true
+	if transport.TLSClientConfig == nil {
+		transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+	} else {
+		transport.TLSClientConfig = transport.TLSClientConfig.Clone()
+		if transport.TLSClientConfig.MinVersion < tls.VersionTLS12 {
+			transport.TLSClientConfig.MinVersion = tls.VersionTLS12
+		}
+	}
+	baseDial := transport.DialContext
+	if baseDial == nil {
+		baseDial = (&net.Dialer{}).DialContext
+	}
+	transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		host, port, err := net.SplitHostPort(address)
+		if err != nil {
+			return nil, fmt.Errorf("%w: invalid dial address", ErrHTTPNetworkPolicy)
+		}
+		addresses, err := net.DefaultResolver.LookupNetIP(ctx, "ip", host)
+		if err != nil {
+			return nil, err
+		}
+		var dialErrors []error
+		for _, candidate := range addresses {
+			if err := policy.validateAddress(candidate); err != nil {
+				dialErrors = append(dialErrors, err)
+				continue
+			}
+			connection, err := baseDial(ctx, network, net.JoinHostPort(candidate.String(), port))
+			if err == nil {
+				return connection, nil
+			}
+			dialErrors = append(dialErrors, err)
+		}
+		if len(dialErrors) == 0 {
+			return nil, fmt.Errorf("resolve %s: no addresses", host)
+		}
+		return nil, errors.Join(dialErrors...)
+	}
+	return transport
 }
 
 func protocolError(format string, arguments ...any) error {

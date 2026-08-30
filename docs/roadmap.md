@@ -56,6 +56,7 @@
 - [x] Control-plane-mediated Agent-to-Agent child Runs with bounded recursion/fan-out
 - [x] Real two-replica distributed acceptance test with PostgreSQL, Redis, and NATS
 - [x] API/Worker process separation architectural analysis (no implementation)
+- [x] Policy-controlled HTTP Runtime security and SSRF hardening
 - [ ] Authentication
 - [ ] RBAC
 - [ ] Audit log

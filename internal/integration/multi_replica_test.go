@@ -208,9 +208,15 @@ func TestRealMultiReplicaControlPlane(t *testing.T) {
 	}
 	failedRun := submitReplicaRun(t, apiA.URL, agent.ID, "force-dlq", "multi-dlq-"+suffix)
 	waitReplicaRun(t, ctx, repositoryB, failedRun.ID, domain.RunFailed)
-	dlqMessage, err := dlqSubscription.NextMsg(3 * time.Second)
-	if err != nil || !bytes.Contains(dlqMessage.Data, []byte(failedRun.ID)) {
-		t.Fatalf("DLQ did not receive failed Run: message=%v err=%v", dlqMessage, err)
+	dlqDeadline := time.Now().Add(3 * time.Second)
+	for {
+		dlqMessage, err := dlqSubscription.NextMsg(time.Until(dlqDeadline))
+		if err != nil {
+			t.Fatalf("DLQ did not receive failed Run %s: %v", failedRun.ID, err)
+		}
+		if bytes.Contains(dlqMessage.Data, []byte(failedRun.ID)) {
+			break
+		}
 	}
 
 	stopB()
