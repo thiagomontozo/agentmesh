@@ -21,6 +21,7 @@ import (
 	"github.com/thiagomontozo/agentmesh/internal/domain"
 	"github.com/thiagomontozo/agentmesh/internal/engine"
 	"github.com/thiagomontozo/agentmesh/internal/events"
+	"github.com/thiagomontozo/agentmesh/internal/mcp"
 	"github.com/thiagomontozo/agentmesh/internal/metrics"
 	"github.com/thiagomontozo/agentmesh/internal/observability"
 	agentrouter "github.com/thiagomontozo/agentmesh/internal/router"
@@ -43,11 +44,18 @@ type Server struct {
 	auditRetention       time.Duration
 	auditMaxEvents       int
 	metrics              *metrics.Registry
+	tools                toolGateway
 }
 
 type workflowController interface {
 	StartWorkflow(ctx context.Context, id string) (domain.Workflow, error)
 	CancelWorkflow(ctx context.Context, id string) (domain.Workflow, error)
+}
+
+type toolGateway interface {
+	Servers() []mcp.ServerView
+	ListTools(context.Context, string, string) (mcp.ListToolsResult, error)
+	CallTool(context.Context, string, string, map[string]any) (mcp.CallToolResult, error)
 }
 
 func New(s store.Repository, e *engine.Engine, bus events.Broker) *Server {
@@ -100,6 +108,8 @@ func (s *Server) SetAPISecurity(authenticator *apiauth.Authenticator, auditReten
 
 func (s *Server) SetMetrics(registry *metrics.Registry) { s.metrics = registry }
 
+func (s *Server) SetToolGateway(gateway toolGateway) { s.tools = gateway }
+
 func (s *Server) Handler() http.Handler {
 	handler := http.Handler(recoverMiddleware(s.mux))
 	handler = s.auditMiddleware(handler)
@@ -135,7 +145,77 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/workflows/{id}/cancel", s.cancelWorkflow)
 	s.mux.HandleFunc("GET /api/v1/workflows/{id}/events", s.workflowEvents)
 	s.mux.HandleFunc("GET /api/v1/audit-events", s.listAuditEvents)
+	s.mux.HandleFunc("GET /api/v1/tools/servers", s.listToolServers)
+	s.mux.HandleFunc("GET /api/v1/tools", s.listTools)
+	s.mux.HandleFunc("POST /api/v1/tools/call", s.callTool)
 	s.mux.HandleFunc("GET /metrics", s.prometheusMetrics)
+}
+
+func (s *Server) listToolServers(w http.ResponseWriter, _ *http.Request) {
+	if s.tools == nil {
+		writeJSON(w, http.StatusOK, []mcp.ServerView{})
+		return
+	}
+	writeJSON(w, http.StatusOK, s.tools.Servers())
+}
+
+func (s *Server) listTools(w http.ResponseWriter, r *http.Request) {
+	if s.tools == nil {
+		writeError(w, http.StatusServiceUnavailable, "MCP tool gateway is unavailable")
+		return
+	}
+	serverID := strings.TrimSpace(r.URL.Query().Get("server_id"))
+	if serverID == "" {
+		writeError(w, http.StatusBadRequest, "server_id is required")
+		return
+	}
+	result, err := s.tools.ListTools(r.Context(), serverID, r.URL.Query().Get("cursor"))
+	if err != nil {
+		s.writeToolError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+type callToolRequest struct {
+	ServerID  string         `json:"server_id"`
+	Name      string         `json:"name"`
+	Arguments map[string]any `json:"arguments"`
+}
+
+func (s *Server) callTool(w http.ResponseWriter, r *http.Request) {
+	if s.tools == nil {
+		writeError(w, http.StatusServiceUnavailable, "MCP tool gateway is unavailable")
+		return
+	}
+	var request callToolRequest
+	if err := decodeJSON(r, &request); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if strings.TrimSpace(request.ServerID) == "" || strings.TrimSpace(request.Name) == "" {
+		writeError(w, http.StatusBadRequest, "server_id and name are required")
+		return
+	}
+	result, err := s.tools.CallTool(r.Context(), request.ServerID, request.Name, request.Arguments)
+	if err != nil {
+		s.writeToolError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) writeToolError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, mcp.ErrServerNotFound):
+		writeError(w, http.StatusNotFound, "MCP server not found")
+	case errors.Is(err, mcp.ErrToolDenied):
+		writeError(w, http.StatusForbidden, "MCP tool denied by policy")
+	case errors.Is(err, mcp.ErrTimeout):
+		writeError(w, http.StatusGatewayTimeout, "MCP tool request timed out")
+	default:
+		writeError(w, http.StatusBadGateway, "MCP server request failed")
+	}
 }
 
 type createWorkflowRequest struct {

@@ -34,8 +34,8 @@
 - [x] Bounded PostgreSQL Run event history and cross-restart SSE replay
 - [x] LLM provider interface
 - [x] OpenAI-compatible provider
-- [ ] MCP client and tool registry
-- [ ] Tool policies and timeouts
+- [x] MCP client and tool registry
+- [x] Tool policies and timeouts
 - [ ] Human approval gates
 
 ## v0.4 — Observability and security

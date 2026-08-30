@@ -66,6 +66,8 @@ boundary are documented in [Rolling-upgrade compatibility](compatibility.md).
 | `AGENTMESH_DATABASE_URL` | none | Required in distributed mode |
 | `AGENTMESH_NATS_URL` | none | Required in distributed mode |
 | `AGENTMESH_REDIS_URL` | none | Required in distributed mode |
+| `AGENTMESH_MCP_SERVERS` | none | JSON array of stateless Streamable HTTP MCP servers and per-server tool policy |
+| `AGENTMESH_MCP_DEFAULT_TIMEOUT` | `10s` | Positive default deadline for MCP discovery and calls |
 
 ## Remote HTTP Agents
 
@@ -91,6 +93,13 @@ endpoint base, and a non-empty `model`. The OpenAI-compatible provider calls
 Chat Completions through the same timeout, SSRF policy, response-size limit, and
 request-time credential resolver as the remote HTTP Runtime. See
 [LLM providers](llm-providers.md).
+
+## MCP tools
+
+`AGENTMESH_MCP_SERVERS` configures the in-process MCP registry. Discovery and
+calls use the current stateless Streamable HTTP request format, the existing
+outbound network/authentication controls, deterministic allow/deny policy, and
+per-server deadlines. See [MCP tool gateway](mcp-tools.md).
 
 `AGENTMESH_API_AUTH_CONFIG` enables inbound Bearer authentication and RBAC using
 environment-variable token references. Empty preserves the legacy unauthenticated

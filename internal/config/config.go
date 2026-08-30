@@ -51,6 +51,8 @@ type Config struct {
 	AuditRetention       time.Duration
 	AuditMaxEvents       int
 	MetricsAddr          string
+	MCPServersConfig     string
+	MCPDefaultTimeout    time.Duration
 }
 
 func Load() (Config, error) {
@@ -243,6 +245,10 @@ func Load() (Config, error) {
 	if err != nil || auditMaxEvents < 1 {
 		return Config{}, fmt.Errorf("AGENTMESH_AUDIT_MAX_EVENTS must be a positive integer")
 	}
+	mcpDefaultTimeout, err := durationEnv("AGENTMESH_MCP_DEFAULT_TIMEOUT", 10*time.Second)
+	if err != nil || mcpDefaultTimeout <= 0 {
+		return Config{}, fmt.Errorf("AGENTMESH_MCP_DEFAULT_TIMEOUT must be a positive duration")
+	}
 
 	databaseURL := stringEnv("AGENTMESH_DATABASE_URL", "")
 	natsURL := stringEnv("AGENTMESH_NATS_URL", "")
@@ -293,6 +299,8 @@ func Load() (Config, error) {
 		AuditRetention:       auditRetention,
 		AuditMaxEvents:       auditMaxEvents,
 		MetricsAddr:          stringEnv("AGENTMESH_METRICS_ADDR", ""),
+		MCPServersConfig:     stringEnv("AGENTMESH_MCP_SERVERS", ""),
+		MCPDefaultTimeout:    mcpDefaultTimeout,
 	}, nil
 }
 
