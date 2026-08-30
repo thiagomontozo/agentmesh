@@ -43,6 +43,7 @@ The test proves:
 - API-created work is executed by a worker-only process;
 - API SSE receives the worker process's terminal event;
 - idempotency survives the process boundary;
+- cancellation requested through the API interrupts the worker process runtime;
 - restarting the API does not recover or reset a Run owned by a healthy worker;
 - hard-killing the worker leaves a running Run and lease behind;
 - a replacement worker recovers only after the lease expires and completes the

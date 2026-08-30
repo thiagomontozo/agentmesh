@@ -383,6 +383,50 @@ func TestRemoteReplicaCancellationCannotBeOverwrittenByStaleWorker(t *testing.T)
 	}
 }
 
+func TestRemoteReplicaCancellationInterruptsWorkerContext(t *testing.T) {
+	started := make(chan struct{})
+	interrupted := make(chan struct{})
+	executor := executorFunc(func(ctx context.Context, _ domain.Agent, _ string) (string, error) {
+		close(started)
+		<-ctx.Done()
+		close(interrupted)
+		return "", ctx.Err()
+	})
+	memory := store.NewMemory()
+	sharedBus := events.NewBus()
+	sharedCoordinator := coordination.NewMemory()
+	worker := New(memory, sharedBus, executor, queue.NewMemory(4), sharedCoordinator, 1, testRetryPolicy(1))
+	api := New(memory, sharedBus, DemoExecutor{}, queue.NewMemory(1), sharedCoordinator, 1, testRetryPolicy(1))
+	ctx, stop := context.WithCancel(context.Background())
+	worker.Start(ctx)
+	defer func() {
+		stop()
+		worker.Stop()
+		api.Stop()
+	}()
+	createTestData(t, memory, 1)
+	if err := worker.Enqueue(ctx, "run_1"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for worker runtime")
+	}
+	if _, err := api.Cancel(context.Background(), "run_1"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-interrupted:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("distributed cancellation event did not interrupt worker context")
+	}
+	loaded, err := memory.GetRun(context.Background(), "run_1")
+	if err != nil || loaded.Status != domain.RunCanceled {
+		t.Fatalf("distributed cancellation was not persisted: run=%+v err=%v", loaded, err)
+	}
+}
+
 func TestEnginePassesAttemptContextThroughResolvedRuntime(t *testing.T) {
 	requests := make(chan agentruntime.ExecutionRequest, 1)
 	implementation := resolvedRuntimeFunc(func(_ context.Context, request agentruntime.ExecutionRequest) (agentruntime.ExecutionResult, error) {

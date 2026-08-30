@@ -181,7 +181,12 @@ Cancel a queued or running Run:
 curl -X POST http://localhost:8080/api/v1/runs/run_REPLACE_ME/cancel
 ```
 
-Successful cancellation returns the canceled Run with `200 OK`. A terminal Run returns `409 Conflict`; an unknown Run returns `404 Not Found`. Cancellation clears output/error, records `completed_at`, stops local execution context, and prevents further retries. In multi-replica mode, persisted cancellation cannot be overwritten by a stale worker, but immediate interruption is limited to a worker in the same process until distributed cancellation signaling exists.
+Successful cancellation returns the canceled Run with `200 OK`. A terminal Run
+returns `409 Conflict`; an unknown Run returns `404 Not Found`. Cancellation
+clears output/error, records `completed_at`, and prevents further retries. The
+`run.canceled` event interrupts a context-aware runtime even when it is executing
+in another replica; persisted-state polling provides a fallback when live event
+delivery is unavailable.
 
 ## Server-Sent Events
 

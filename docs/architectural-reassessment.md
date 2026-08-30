@@ -5,6 +5,11 @@ versioning. Scores follow the project rubric: `0` absent, `1` initial concept,
 `2` partial, `3` functionally basic, `4` functionally solid, `5` mature. A score
 is not increased merely because related code exists.
 
+> Post-audit update: the critical platform increment added separate API/Worker
+> processes and cross-replica cancellation. The historical scores below describe
+> the Item 34 checkpoint; resolved critical gaps are tracked in the roadmap and
+> current architecture documentation.
+
 ## Executive conclusion
 
 AgentMesh is a consolidated **Level 6 — Multi-Agent Orchestrator** and a partial
@@ -78,8 +83,8 @@ Level 7 claim.
 1. Add a process/container-level multi-replica acceptance test: independent
    AgentMesh A/B processes, process kill, restart, valid-owner preservation,
    cross-replica SSE, idempotency, lease/fence behavior, and DLQ.
-2. Add distributed Run cancellation signaling so an API replica can promptly
-   stop the runtime context owned by another healthy worker replica.
+2. ~~Add distributed Run cancellation signaling.~~ Resolved by per-Run event
+   subscription with persisted polling fallback and a process-level test.
 3. Define and enforce Workflow scheduler ownership before independently scaling
    API, workers, or scheduler processes.
 4. Require and test Agent Protocol idempotency for irreversible external effects;
@@ -125,4 +130,4 @@ Level 7 claim.
 | Distributed baseline is tested | `internal/integration/multi_replica_test.go` | `TestRealMultiReplicaControlPlane` | Cross-replica execution/read/SSE, normal non-duplication, DLQ, valid-owner recovery protection, expired-lease recovery, and idempotency use real dependencies. |
 | Separate-process behavior | `internal/integration/multi_replica_test.go` | Test construction | **NOT PROVEN:** both replica stacks execute in one Go test process. |
 | Metrics and tracing | repository-wide code | — | **NOT PROVEN:** no metrics exporter or distributed tracing implementation exists. |
-| Immediate distributed cancellation | `internal/engine/engine.go` | `Engine.Cancel`, `active` map | **NOT PROVEN:** active context cancellation is local to the Engine process; persistence only prevents stale finalization elsewhere. |
+| Immediate distributed cancellation | `internal/engine/engine.go`, `internal/integration/process_replicas_test.go` | `Engine.Cancel`, `watchCancellation`, `TestSeparateProcessesExecutePreserveAndRecoverRuns` | Proven for context-aware runtimes across API and worker processes through NATS events with persisted polling fallback. |

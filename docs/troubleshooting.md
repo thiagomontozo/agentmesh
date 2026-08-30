@@ -54,7 +54,12 @@ AgentMesh recovered a panic raised inside `Runtime.Execute`. Search structured l
 
 ## A canceled Run is still active on another replica
 
-The `canceled` state is durable and stale workers cannot replace it, but active context cancellation is process-local. If the API request reached a different replica from the worker, the external call may remain active until it returns or reaches `AGENTMESH_ATTEMPT_TIMEOUT`; its result is discarded. Use Agent Protocol idempotency to control side effects. Cross-replica cancellation signaling remains pending.
+The `canceled` state is durable and stale workers cannot replace it. Active
+workers subscribe to distributed Run events and also poll persisted state, so a
+context-aware remote call is interrupted even when cancellation reaches another
+replica. If a custom runtime ignores `context.Context`, it may remain active until
+it returns; its result is discarded. Use Agent Protocol idempotency to control
+side effects already accepted by an external Agent.
 
 ## A Run reports `run.lease_lost`
 
