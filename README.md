@@ -244,6 +244,7 @@ docs/                   roadmap and architecture notes
 - [Agent Protocol V1](docs/agent-protocol-v1.md)
 - [External HTTP Agents](docs/external-agents.md)
 - [Multi-replica integration test](docs/multi-replica-testing.md)
+- [API and Worker separation analysis](docs/api-worker-separation-analysis.md)
 - [Configuration and operations](docs/configuration.md)
 - [API usage and examples](docs/api.md)
 - [Troubleshooting](docs/troubleshooting.md)
