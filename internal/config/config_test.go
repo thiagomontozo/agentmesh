@@ -25,7 +25,7 @@ func TestLoadDefaults(t *testing.T) {
 		t.Fatalf("unexpected event history defaults: %+v", cfg)
 	}
 	if cfg.AgentHealthPath != "/healthz" || cfg.AgentHealthInterval != 30*time.Second ||
-		cfg.AgentHealthTimeout != 2*time.Second || cfg.AgentHealthWorkers != 2 {
+		cfg.AgentHealthTimeout != 2*time.Second || cfg.AgentHealthWorkers != 2 || cfg.WorkflowConcurrency != 4 {
 		t.Fatalf("unexpected agent health defaults: %+v", cfg)
 	}
 }
@@ -57,6 +57,7 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 		{name: "agent health interval is zero", key: "AGENTMESH_AGENT_HEALTH_INTERVAL", value: "0s"},
 		{name: "agent health timeout is zero", key: "AGENTMESH_AGENT_HEALTH_TIMEOUT", value: "0s"},
 		{name: "agent health workers is zero", key: "AGENTMESH_AGENT_HEALTH_WORKERS", value: "0"},
+		{name: "workflow concurrency is zero", key: "AGENTMESH_WORKFLOW_CONCURRENCY", value: "0"},
 	}
 
 	for _, test := range tests {
@@ -128,6 +129,7 @@ func clearEnvironment(t *testing.T) {
 		"AGENTMESH_AGENT_HEALTH_INTERVAL",
 		"AGENTMESH_AGENT_HEALTH_TIMEOUT",
 		"AGENTMESH_AGENT_HEALTH_WORKERS",
+		"AGENTMESH_WORKFLOW_CONCURRENCY",
 	} {
 		t.Setenv(key, "")
 	}

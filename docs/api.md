@@ -214,7 +214,9 @@ Creating a definition does not execute it. Start a chain-shaped Workflow explici
 curl -X POST http://localhost:8080/api/v1/workflows/wf_REPLACE_ME/start
 ```
 
-The start response is `202 Accepted`. Workflow state progresses `pending → running → succeeded|failed|canceled`; Step state progresses `pending → queued → running → succeeded|failed|canceled`. Each Step becomes an ordinary Run and therefore inherits configured retries, timeout, runtime selection, leases, recovery, cancellation, and observability. A Step with multiple dependencies, multiple dependents, or multiple input sources returns `422` at start in this sequential version.
+The start response is `202 Accepted`. Workflow state progresses `pending → running → succeeded|failed|canceled`; Step state progresses `pending → queued → running → succeeded|failed|canceled`. Each Step becomes an ordinary Run and therefore inherits configured retries, timeout, runtime selection, leases, recovery, cancellation, and observability.
+
+Ready Steps execute concurrently up to `AGENTMESH_WORKFLOW_CONCURRENCY` (default `4`). Fan-out children can run in parallel. A fan-in Step waits for every declared dependency; multiple `input_from` outputs become a JSON string array in declaration order. One branch failure uses fail-fast behavior: active sibling Runs and pending descendants are canceled, and the Workflow becomes failed.
 
 Cancel a pending or running Workflow:
 
@@ -230,7 +232,7 @@ Stream persisted lifecycle events:
 curl -N http://localhost:8080/api/v1/workflows/wf_REPLACE_ME/events
 ```
 
-Events include `workflow.started`, `workflow.step_queued`, and one terminal `workflow.succeeded`, `workflow.failed`, or `workflow.canceled`. Frames contain stable `event_id`, `workflow_id`, optional `step_id`/`run_id`, type, message, and timestamp. History is bounded to 1,000 events and seven days. The endpoint polls persistent history, so a client on one replica can observe state produced by another; there is not yet a live NATS Workflow-event transport.
+Events include `workflow.started`, `workflow.step_queued`, `workflow.step_running`, Step terminal transitions, and one terminal `workflow.succeeded`, `workflow.failed`, or `workflow.canceled`. Frames contain stable `event_id`, `workflow_id`, optional `step_id`/`run_id`, type, message, and timestamp. History is bounded to 1,000 events and seven days. The endpoint polls persistent history, so a client on one replica can observe state produced by another; there is not yet a live NATS Workflow-event transport.
 
 ## Request validation
 

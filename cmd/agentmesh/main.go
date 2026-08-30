@@ -110,7 +110,7 @@ func main() {
 		os.Exit(1)
 	}
 	runEngine.Start(rootCtx)
-	workflowManager := workflowengine.New(repository, runEngine)
+	workflowManager := workflowengine.NewWithConcurrency(repository, runEngine, cfg.WorkflowConcurrency)
 	workflowManager.Run(rootCtx)
 	if err := workflowManager.Recover(rootCtx); err != nil {
 		logger.Error("workflow recovery failed", "error", err)

@@ -133,7 +133,7 @@ Memory and PostgreSQL validate the relationship on creation. PostgreSQL adds sel
 
 `GET /api/v1/runs/{id}/children` returns direct children only, ordered by creation time and ID. Creation emits a lineage-bearing `run.queued` event on the child and `run.child_queued` on the parent. Subsequent Engine lifecycle events retain the child's parent/root fields, and distributed PostgreSQL event history persists them.
 
-This is composition groundwork, not a workflow engine. Parent completion does not trigger children, outputs are not propagated, failure/cancellation does not cascade, and there are no dependencies, DAG scheduling, fan-out/fan-in, conditions, or cycle traversal.
+Run lineage remains passive on its own: parent completion does not automatically trigger arbitrary child Runs. Workflow definitions and their manager provide the explicit dependency scheduler described below; Runs created outside a Workflow retain their independent behavior.
 
 ## Workflow Model V1
 
@@ -143,15 +143,19 @@ Memory stores isolated deep copies. PostgreSQL migration `013_workflows.sql` sto
 
 The API can create, list, and fetch definitions. Definitions remain inert until explicitly started.
 
-## Sequential Workflow execution
+## Workflow DAG execution
 
-`internal/workflow.Manager` accepts only a DAG that is a single connected chain: one root, at most one dependency, one dependent, and one input source per Step. A fan-out or fan-in definition remains persistable but its start request is rejected until the parallel scheduler is enabled.
+`internal/workflow.Manager` reconciles the validated DAG and keeps at most `AGENTMESH_WORKFLOW_CONCURRENCY` queued/running Steps per Workflow. The default is four. It scans Steps in declaration order, so ready work is admitted deterministically while the Run Engine supplies the actual worker pool and distributed execution.
 
-The manager reconciles persisted Workflow state and creates one idempotent Run per Step using the key `workflow:{workflow_id}:step:{step_id}`. It assigns the preceding Step Run as `parent_run_id`, so existing root lineage remains authoritative. Literal input, top-level Workflow input, or one completed Step output is resolved explicitly. The manager then enqueues the Run and observes its persisted lifecycle; Engine continues to own worker concurrency, runtime resolution, attempt timeout, retries, panic isolation, leases, fencing, and Run events.
+The manager creates one idempotent Run per Step using the key `workflow:{workflow_id}:step:{step_id}`. Fan-out children each reference their common dependency Run as `parent_run_id`. At fan-in, the first declared dependency is the primary Run-lineage parent because a Run supports one parent; the complete dependency graph remains authoritative in `WorkflowStep.depends_on`. Literal input, top-level Workflow input, or completed Step outputs are resolved explicitly. Engine continues to own worker concurrency, runtime resolution, attempt timeout, retries, panic isolation, leases, fencing, and Run events.
 
-Step failure fails the Workflow and marks remaining pending Steps canceled. Explicit Workflow cancellation marks non-terminal Steps canceled and calls the existing Engine cancellation path for the active Run. A succeeded Step output is persisted before the next Run is created. Stable idempotency keys and `ListRunningWorkflows` allow a restarted manager to resume without creating a second Run for an assigned Step. Application startup recovers queued/running Runs before recovering Workflow reconciliation.
+One source preserves its output verbatim. Multiple `input_from` sources use the controlled `json-array` aggregation and preserve declaration order. For example, outputs from B and C become `["B output","C output"]` for D. There is no template evaluation or arbitrary code execution.
 
-Workflow lifecycle events are stored in Memory or the bounded PostgreSQL `workflow_events` table. The Workflow SSE endpoint polls this authoritative history, which makes events visible across API replicas without adding a second NATS subject. Polling and client writes are outside execution goroutines, so a slow SSE client cannot block Workflow progress. At this stage only a single sequential Step can be active; fan-out/fan-in is intentionally absent.
+The initial partial-failure policy is fail-fast: one failed/canceled branch makes the Workflow terminal, marks pending and active siblings canceled, and calls the existing Engine cancellation path for their Runs. Explicit Workflow cancellation uses the same persisted-first behavior. A succeeded Step output is persisted before dependents become ready. Stable idempotency keys and `ListRunningWorkflows` allow a restarted manager to resume without creating a second Run for an assigned Step. Application startup recovers queued/running Runs before recovering Workflow reconciliation.
+
+Workflow and Step transition events are stored in Memory or the bounded PostgreSQL `workflow_events` table. The Workflow SSE endpoint polls this authoritative history, which makes events visible across API replicas without adding a second NATS subject. Polling and client writes are outside execution goroutines, so a slow SSE client cannot block Workflow progress.
+
+This is a finite DAG scheduler only. Loops, conditions, dynamic Steps, compensations, arbitrary aggregation, and LLM planning remain out of scope.
 
 ## Agent Registry lifecycle
 

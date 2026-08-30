@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -21,12 +22,11 @@ const (
 	eventHistoryLimit   = 1000
 )
 
-var ErrNotSequential = errors.New("workflow is not sequential")
-
 type Manager struct {
-	store  store.Repository
-	engine *engine.Engine
-	poll   time.Duration
+	store       store.Repository
+	engine      *engine.Engine
+	poll        time.Duration
+	concurrency int
 
 	mu     sync.Mutex
 	ctx    context.Context
@@ -35,7 +35,14 @@ type Manager struct {
 }
 
 func New(repository store.Repository, runEngine *engine.Engine) *Manager {
-	return &Manager{store: repository, engine: runEngine, poll: defaultPollInterval, active: make(map[string]struct{})}
+	return NewWithConcurrency(repository, runEngine, 4)
+}
+
+func NewWithConcurrency(repository store.Repository, runEngine *engine.Engine, concurrency int) *Manager {
+	if concurrency < 1 {
+		concurrency = 1
+	}
+	return &Manager{store: repository, engine: runEngine, poll: defaultPollInterval, concurrency: concurrency, active: make(map[string]struct{})}
 }
 
 func (m *Manager) Run(ctx context.Context) {
@@ -52,10 +59,6 @@ func (m *Manager) Recover(ctx context.Context) error {
 		return fmt.Errorf("list running workflows: %w", err)
 	}
 	for _, candidate := range workflows {
-		if err := candidate.ValidateSequential(); err != nil {
-			m.failInvalidRecovered(ctx, candidate, err)
-			continue
-		}
 		m.schedule(candidate.ID)
 	}
 	return nil
@@ -65,9 +68,6 @@ func (m *Manager) StartWorkflow(ctx context.Context, id string) (domain.Workflow
 	candidate, err := m.store.GetWorkflow(ctx, id)
 	if err != nil {
 		return domain.Workflow{}, err
-	}
-	if err := candidate.ValidateSequential(); err != nil {
-		return domain.Workflow{}, fmt.Errorf("%w: %v", ErrNotSequential, err)
 	}
 	if candidate.Status != domain.WorkflowPending {
 		return domain.Workflow{}, fmt.Errorf("workflow cannot start from status %s", candidate.Status)
@@ -157,28 +157,34 @@ func (m *Manager) reconcile(ctx context.Context, id string) error {
 		if candidate.IsTerminal() {
 			return nil
 		}
+		previousStatuses := stepStatuses(candidate)
 		changed, terminal, err := m.refreshSteps(ctx, &candidate)
 		if err != nil {
 			return err
 		}
 		if terminal {
-			if _, err := m.store.UpdateWorkflow(ctx, candidate, candidate.Version); errors.Is(err, store.ErrConflict) {
+			updated, err := m.store.UpdateWorkflow(ctx, candidate, candidate.Version)
+			if errors.Is(err, store.ErrConflict) {
 				continue
 			} else if err != nil {
 				return err
 			}
+			m.cancelCanceledStepRuns(ctx, updated)
+			m.emitStepTransitions(ctx, updated, previousStatuses)
 			m.emit(ctx, candidate.ID, "", "", workflowTerminalEvent(candidate.Status), candidate.Error)
 			return nil
 		}
 		if changed {
-			if _, err := m.store.UpdateWorkflow(ctx, candidate, candidate.Version); errors.Is(err, store.ErrConflict) {
+			updated, err := m.store.UpdateWorkflow(ctx, candidate, candidate.Version)
+			if errors.Is(err, store.ErrConflict) {
 				continue
 			} else if err != nil {
 				return err
 			}
+			m.emitStepTransitions(ctx, updated, previousStatuses)
 			continue
 		}
-		if hasActiveStep(candidate) {
+		if activeStepCount(candidate) >= m.concurrency {
 			if err := wait(ctx, m.poll); err != nil {
 				return err
 			}
@@ -186,9 +192,15 @@ func (m *Manager) reconcile(ctx context.Context, id string) error {
 		}
 		next := readyStep(candidate)
 		if next < 0 {
-			return m.failWorkflow(ctx, candidate, fmt.Errorf("no sequential step is ready"))
+			if activeStepCount(candidate) > 0 {
+				if err := wait(ctx, m.poll); err != nil {
+					return err
+				}
+				continue
+			}
+			return m.failWorkflow(ctx, candidate, fmt.Errorf("no workflow step is ready"))
 		}
-		input, parentRunID, err := resolveSequentialInput(candidate, candidate.Steps[next])
+		input, parentRunID, err := resolveInput(candidate, candidate.Steps[next])
 		if err != nil {
 			return m.failWorkflow(ctx, candidate, err)
 		}
@@ -263,7 +275,7 @@ func (m *Manager) refreshSteps(ctx context.Context, workflow *domain.Workflow) (
 				workflow.Status = domain.WorkflowCanceled
 			}
 			workflow.CompletedAt = &now
-			cancelPendingSteps(workflow, now)
+			cancelNonterminalSteps(workflow, now)
 			return true, true, nil
 		}
 	}
@@ -278,16 +290,12 @@ func (m *Manager) refreshSteps(ctx context.Context, workflow *domain.Workflow) (
 func (m *Manager) failWorkflow(ctx context.Context, workflow domain.Workflow, cause error) error {
 	now := time.Now().UTC()
 	workflow.Status, workflow.Error, workflow.CompletedAt = domain.WorkflowFailed, cause.Error(), &now
-	cancelPendingSteps(&workflow, now)
+	cancelNonterminalSteps(&workflow, now)
 	if _, err := m.store.UpdateWorkflow(ctx, workflow, workflow.Version); err != nil && !errors.Is(err, store.ErrConflict) {
 		return err
 	}
 	m.emit(ctx, workflow.ID, "", "", "workflow.failed", workflow.Error)
 	return cause
-}
-
-func (m *Manager) failInvalidRecovered(ctx context.Context, workflow domain.Workflow, cause error) {
-	_ = m.failWorkflow(ctx, workflow, fmt.Errorf("%w: %v", ErrNotSequential, cause))
 }
 
 func (m *Manager) emit(ctx context.Context, workflowID, stepID, runID, eventType, message string) {
@@ -297,13 +305,33 @@ func (m *Manager) emit(ctx context.Context, workflowID, stepID, runID, eventType
 	}
 }
 
-func hasActiveStep(workflow domain.Workflow) bool {
+func (m *Manager) emitStepTransitions(ctx context.Context, workflow domain.Workflow, previous map[string]domain.WorkflowStepStatus) {
+	for _, step := range workflow.Steps {
+		if previous[step.ID] == step.Status {
+			continue
+		}
+		eventType := "workflow.step_" + string(step.Status)
+		message := fmt.Sprintf("workflow step %s", step.Status)
+		m.emit(ctx, workflow.ID, step.ID, step.RunID, eventType, message)
+	}
+}
+
+func stepStatuses(workflow domain.Workflow) map[string]domain.WorkflowStepStatus {
+	result := make(map[string]domain.WorkflowStepStatus, len(workflow.Steps))
+	for _, step := range workflow.Steps {
+		result[step.ID] = step.Status
+	}
+	return result
+}
+
+func activeStepCount(workflow domain.Workflow) int {
+	count := 0
 	for _, step := range workflow.Steps {
 		if step.Status == domain.WorkflowStepQueued || step.Status == domain.WorkflowStepRunning {
-			return true
+			count++
 		}
 	}
-	return false
+	return count
 }
 
 func readyStep(workflow domain.Workflow) int {
@@ -329,9 +357,9 @@ func readyStep(workflow domain.Workflow) int {
 	return -1
 }
 
-func resolveSequentialInput(workflow domain.Workflow, step domain.WorkflowStep) (string, string, error) {
+func resolveInput(workflow domain.Workflow, step domain.WorkflowStep) (string, string, error) {
 	parentRunID := ""
-	if len(step.DependsOn) == 1 {
+	if len(step.DependsOn) > 0 {
 		dependency := findStep(workflow, step.DependsOn[0])
 		if dependency == nil || dependency.Status != domain.WorkflowStepSucceeded {
 			return "", "", fmt.Errorf("step %s dependency is not complete", step.ID)
@@ -341,14 +369,29 @@ func resolveSequentialInput(workflow domain.Workflow, step domain.WorkflowStep) 
 	if len(step.InputFrom) == 0 {
 		return step.Input, parentRunID, nil
 	}
-	if step.InputFrom[0] == domain.WorkflowInputSource {
-		return workflow.Input, parentRunID, nil
+	values := make([]string, 0, len(step.InputFrom))
+	for _, sourceID := range step.InputFrom {
+		if sourceID == domain.WorkflowInputSource {
+			values = append(values, workflow.Input)
+			continue
+		}
+		source := findStep(workflow, sourceID)
+		if source == nil || source.Status != domain.WorkflowStepSucceeded {
+			return "", "", fmt.Errorf("step %s input source %s is not complete", step.ID, sourceID)
+		}
+		values = append(values, source.Output)
 	}
-	source := findStep(workflow, step.InputFrom[0])
-	if source == nil || source.Status != domain.WorkflowStepSucceeded {
-		return "", "", fmt.Errorf("step %s input source is not complete", step.ID)
+	if len(values) == 1 {
+		return values[0], parentRunID, nil
 	}
-	return source.Output, parentRunID, nil
+	if step.InputAggregation != domain.WorkflowInputJSONArray {
+		return "", "", fmt.Errorf("step %s requires json-array aggregation", step.ID)
+	}
+	aggregated, err := json.Marshal(values)
+	if err != nil {
+		return "", "", fmt.Errorf("aggregate step %s input: %w", step.ID, err)
+	}
+	return string(aggregated), parentRunID, nil
 }
 
 func findStep(workflow domain.Workflow, id string) *domain.WorkflowStep {
@@ -360,11 +403,22 @@ func findStep(workflow domain.Workflow, id string) *domain.WorkflowStep {
 	return nil
 }
 
-func cancelPendingSteps(workflow *domain.Workflow, at time.Time) {
+func cancelNonterminalSteps(workflow *domain.Workflow, at time.Time) {
 	for index := range workflow.Steps {
-		if workflow.Steps[index].Status == domain.WorkflowStepPending {
+		if workflow.Steps[index].Status == domain.WorkflowStepPending || workflow.Steps[index].Status == domain.WorkflowStepQueued || workflow.Steps[index].Status == domain.WorkflowStepRunning {
 			workflow.Steps[index].Status = domain.WorkflowStepCanceled
 			workflow.Steps[index].CompletedAt = &at
+		}
+	}
+}
+
+func (m *Manager) cancelCanceledStepRuns(ctx context.Context, workflow domain.Workflow) {
+	for _, step := range workflow.Steps {
+		if step.Status != domain.WorkflowStepCanceled || step.RunID == "" {
+			continue
+		}
+		if _, err := m.engine.Cancel(ctx, step.RunID); err != nil && !errors.Is(err, domain.ErrRunNotCancelable) {
+			slog.WarnContext(ctx, "fan-out Run cancellation failed", "workflow_id", workflow.ID, "step_id", step.ID, "run_id", step.RunID, "error", err)
 		}
 	}
 }
