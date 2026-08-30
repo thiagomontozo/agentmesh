@@ -53,6 +53,8 @@ type Config struct {
 	MetricsAddr          string
 	MCPServersConfig     string
 	MCPDefaultTimeout    time.Duration
+	ApprovalTTL          time.Duration
+	ApprovalRetention    time.Duration
 }
 
 func Load() (Config, error) {
@@ -249,6 +251,14 @@ func Load() (Config, error) {
 	if err != nil || mcpDefaultTimeout <= 0 {
 		return Config{}, fmt.Errorf("AGENTMESH_MCP_DEFAULT_TIMEOUT must be a positive duration")
 	}
+	approvalTTL, err := durationEnv("AGENTMESH_APPROVAL_TTL", 15*time.Minute)
+	if err != nil || approvalTTL <= 0 {
+		return Config{}, fmt.Errorf("AGENTMESH_APPROVAL_TTL must be a positive duration")
+	}
+	approvalRetention, err := durationEnv("AGENTMESH_APPROVAL_RETENTION", 30*24*time.Hour)
+	if err != nil || approvalRetention <= 0 {
+		return Config{}, fmt.Errorf("AGENTMESH_APPROVAL_RETENTION must be a positive duration")
+	}
 
 	databaseURL := stringEnv("AGENTMESH_DATABASE_URL", "")
 	natsURL := stringEnv("AGENTMESH_NATS_URL", "")
@@ -301,6 +311,8 @@ func Load() (Config, error) {
 		MetricsAddr:          stringEnv("AGENTMESH_METRICS_ADDR", ""),
 		MCPServersConfig:     stringEnv("AGENTMESH_MCP_SERVERS", ""),
 		MCPDefaultTimeout:    mcpDefaultTimeout,
+		ApprovalTTL:          approvalTTL,
+		ApprovalRetention:    approvalRetention,
 	}, nil
 }
 

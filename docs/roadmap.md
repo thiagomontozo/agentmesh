@@ -36,7 +36,7 @@
 - [x] OpenAI-compatible provider
 - [x] MCP client and tool registry
 - [x] Tool policies and timeouts
-- [ ] Human approval gates
+- [x] Human approval gates
 
 ## v0.4 — Observability and security
 - [ ] OpenTelemetry traces and metrics

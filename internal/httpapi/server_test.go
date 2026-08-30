@@ -1252,6 +1252,65 @@ func TestMCPToolRegistryDiscoveryPolicyAndCallAPI(t *testing.T) {
 	}
 }
 
+func TestMCPToolApprovalGateLifecycleAndSingleUse(t *testing.T) {
+	var calls int
+	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		var request struct {
+			ID uint64 `json:"id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatal(err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%d,"result":{"resultType":"complete","content":[{"type":"text","text":"deployed"}]}}`, request.ID)
+	}))
+	defer remote.Close()
+	registry := mcp.NewRegistry()
+	if err := registry.Register(mcp.Server{ID: "ops", Endpoint: remote.URL, AllowedTools: []string{"deploy"}, ApprovalRequiredTools: []string{"deploy"}, Timeout: time.Second}); err != nil {
+		t.Fatal(err)
+	}
+	server, _ := newTestServer(t)
+	server.SetToolGateway(mcp.NewGateway(registry, mcp.NewClient(remote.Client(), 4096, 4096, nil)))
+	handler := server.Handler()
+	request := func(method, path, body string) *httptest.ResponseRecorder {
+		t.Helper()
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(method, path, strings.NewReader(body)))
+		return response
+	}
+
+	withoutApproval := request(http.MethodPost, "/api/v1/tools/call", `{"server_id":"ops","name":"deploy","arguments":{"target":"prod"}}`)
+	if withoutApproval.Code != http.StatusPreconditionRequired || calls != 0 {
+		t.Fatalf("approval gate was bypassed: status=%d calls=%d body=%s", withoutApproval.Code, calls, withoutApproval.Body.String())
+	}
+	createdResponse := request(http.MethodPost, "/api/v1/approvals", `{"server_id":"ops","tool_name":"deploy","arguments":{"target":"prod"},"reason":"release"}`)
+	if createdResponse.Code != http.StatusCreated {
+		t.Fatalf("create approval failed: %d %s", createdResponse.Code, createdResponse.Body.String())
+	}
+	var approval domain.Approval
+	if err := json.Unmarshal(createdResponse.Body.Bytes(), &approval); err != nil {
+		t.Fatal(err)
+	}
+	approvedResponse := request(http.MethodPost, "/api/v1/approvals/"+approval.ID+"/approve", "")
+	if approvedResponse.Code != http.StatusOK || !strings.Contains(approvedResponse.Body.String(), `"status":"approved"`) {
+		t.Fatalf("approve failed: %d %s", approvedResponse.Code, approvedResponse.Body.String())
+	}
+	callBody := fmt.Sprintf(`{"server_id":"ops","name":"deploy","arguments":{"target":"prod"},"approval_id":%q}`, approval.ID)
+	called := request(http.MethodPost, "/api/v1/tools/call", callBody)
+	if called.Code != http.StatusOK || calls != 1 {
+		t.Fatalf("approved call failed: status=%d calls=%d body=%s", called.Code, calls, called.Body.String())
+	}
+	replayed := request(http.MethodPost, "/api/v1/tools/call", callBody)
+	if replayed.Code != http.StatusConflict || calls != 1 {
+		t.Fatalf("single-use approval replayed: status=%d calls=%d body=%s", replayed.Code, calls, replayed.Body.String())
+	}
+	loaded := request(http.MethodGet, "/api/v1/approvals/"+approval.ID, "")
+	if loaded.Code != http.StatusOK || !strings.Contains(loaded.Body.String(), `"status":"consumed"`) {
+		t.Fatalf("consumed approval was not persisted: %d %s", loaded.Code, loaded.Body.String())
+	}
+}
+
 type synchronizedBuffer struct {
 	mu     sync.Mutex
 	buffer bytes.Buffer

@@ -227,6 +227,26 @@ func (c *Cached) ListAuditEvents(ctx context.Context, limit int) ([]domain.Audit
 	return c.inner.ListAuditEvents(ctx, limit)
 }
 
+func (c *Cached) CreateApproval(ctx context.Context, approval domain.Approval, retention time.Duration) (domain.Approval, error) {
+	return c.inner.CreateApproval(ctx, approval, retention)
+}
+
+func (c *Cached) GetApproval(ctx context.Context, id string) (domain.Approval, error) {
+	return c.inner.GetApproval(ctx, id)
+}
+
+func (c *Cached) ListApprovals(ctx context.Context, status domain.ApprovalStatus, limit int) ([]domain.Approval, error) {
+	return c.inner.ListApprovals(ctx, status, limit)
+}
+
+func (c *Cached) DecideApproval(ctx context.Context, id string, approve bool, actor string, now time.Time) (domain.Approval, error) {
+	return c.inner.DecideApproval(ctx, id, approve, actor, now)
+}
+
+func (c *Cached) ConsumeApproval(ctx context.Context, id, serverID, toolName, argumentsHash string, now time.Time) (domain.Approval, error) {
+	return c.inner.ConsumeApproval(ctx, id, serverID, toolName, argumentsHash, now)
+}
+
 func (c *Cached) Ping(ctx context.Context) error {
 	if err := c.inner.Ping(ctx); err != nil {
 		return err

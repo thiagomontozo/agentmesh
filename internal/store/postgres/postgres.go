@@ -984,6 +984,126 @@ func (r *Repository) ListAuditEvents(ctx context.Context, limit int) ([]domain.A
 	return events, rows.Err()
 }
 
+const approvalSelect = `SELECT id, server_id, tool_name, arguments, arguments_hash, reason,
+	status, requested_by, decided_by, created_at, expires_at, decided_at, consumed_at, version
+	FROM approvals`
+
+func (r *Repository) CreateApproval(ctx context.Context, approval domain.Approval, retention time.Duration) (domain.Approval, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return domain.Approval{}, fmt.Errorf("begin approval create: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	created, err := scanApproval(tx.QueryRow(ctx, `INSERT INTO approvals
+		(id, server_id, tool_name, arguments, arguments_hash, reason, status, requested_by,
+		 decided_by, created_at, expires_at, decided_at, consumed_at, version)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+		RETURNING id, server_id, tool_name, arguments, arguments_hash, reason, status,
+		 requested_by, decided_by, created_at, expires_at, decided_at, consumed_at, version`,
+		approval.ID, approval.ServerID, approval.ToolName, approval.Arguments,
+		approval.ArgumentsHash, approval.Reason, approval.Status, approval.RequestedBy,
+		approval.DecidedBy, approval.CreatedAt, approval.ExpiresAt, approval.DecidedAt,
+		approval.ConsumedAt, approval.Version))
+	if err != nil {
+		return domain.Approval{}, fmt.Errorf("insert approval: %w", err)
+	}
+	if retention > 0 {
+		if _, err := tx.Exec(ctx, "DELETE FROM approvals WHERE expires_at < $1", time.Now().UTC().Add(-retention)); err != nil {
+			return domain.Approval{}, fmt.Errorf("retain approvals: %w", err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return domain.Approval{}, fmt.Errorf("commit approval create: %w", err)
+	}
+	return created, nil
+}
+
+func (r *Repository) GetApproval(ctx context.Context, id string) (domain.Approval, error) {
+	approval, err := scanApproval(r.pool.QueryRow(ctx, approvalSelect+" WHERE id = $1", id))
+	if err == pgx.ErrNoRows {
+		return domain.Approval{}, store.ErrNotFound
+	}
+	if err != nil {
+		return domain.Approval{}, fmt.Errorf("get approval: %w", err)
+	}
+	return approval, nil
+}
+
+func (r *Repository) ListApprovals(ctx context.Context, status domain.ApprovalStatus, limit int) ([]domain.Approval, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	rows, err := r.pool.Query(ctx, approvalSelect+` WHERE ($1 = '' OR status = $1)
+		ORDER BY created_at DESC, id LIMIT $2`, status, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list approvals: %w", err)
+	}
+	defer rows.Close()
+	approvals := make([]domain.Approval, 0)
+	for rows.Next() {
+		approval, err := scanApproval(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan approval: %w", err)
+		}
+		approvals = append(approvals, approval)
+	}
+	return approvals, rows.Err()
+}
+
+func (r *Repository) DecideApproval(ctx context.Context, id string, approve bool, actor string, now time.Time) (domain.Approval, error) {
+	status := domain.ApprovalRejected
+	if approve {
+		status = domain.ApprovalApproved
+	}
+	approval, err := scanApproval(r.pool.QueryRow(ctx, `UPDATE approvals SET status=$2,
+		decided_by=$3, decided_at=$4, version=version+1
+		WHERE id=$1 AND status='pending' AND expires_at>$4
+		RETURNING id, server_id, tool_name, arguments, arguments_hash, reason, status,
+		requested_by, decided_by, created_at, expires_at, decided_at, consumed_at, version`,
+		id, status, actor, now.UTC()))
+	if err == nil {
+		return approval, nil
+	}
+	if err != pgx.ErrNoRows {
+		return domain.Approval{}, fmt.Errorf("decide approval: %w", err)
+	}
+	existing, lookupErr := r.GetApproval(ctx, id)
+	if lookupErr != nil {
+		return domain.Approval{}, lookupErr
+	}
+	if existing.Expired(now) {
+		return domain.Approval{}, store.ErrApprovalExpired
+	}
+	return domain.Approval{}, store.ErrApprovalNotPending
+}
+
+func (r *Repository) ConsumeApproval(ctx context.Context, id, serverID, toolName, argumentsHash string, now time.Time) (domain.Approval, error) {
+	approval, err := scanApproval(r.pool.QueryRow(ctx, `UPDATE approvals SET status='consumed',
+		consumed_at=$5, version=version+1
+		WHERE id=$1 AND server_id=$2 AND tool_name=$3 AND arguments_hash=$4
+		AND status='approved' AND expires_at>$5
+		RETURNING id, server_id, tool_name, arguments, arguments_hash, reason, status,
+		requested_by, decided_by, created_at, expires_at, decided_at, consumed_at, version`,
+		id, serverID, toolName, argumentsHash, now.UTC()))
+	if err == nil {
+		return approval, nil
+	}
+	if err != pgx.ErrNoRows {
+		return domain.Approval{}, fmt.Errorf("consume approval: %w", err)
+	}
+	existing, lookupErr := r.GetApproval(ctx, id)
+	if lookupErr != nil {
+		return domain.Approval{}, lookupErr
+	}
+	if existing.ServerID != serverID || existing.ToolName != toolName || existing.ArgumentsHash != argumentsHash {
+		return domain.Approval{}, store.ErrApprovalMismatch
+	}
+	if existing.Expired(now) {
+		return domain.Approval{}, store.ErrApprovalExpired
+	}
+	return domain.Approval{}, store.ErrApprovalNotApproved
+}
+
 func (r *Repository) Ping(ctx context.Context) error {
 	if err := r.pool.Ping(ctx); err != nil {
 		return fmt.Errorf("ping PostgreSQL: %w", err)
@@ -1046,6 +1166,15 @@ func scanAgent(row rowScanner) (domain.Agent, error) {
 		&agent.CreatedAt, &agent.UpdatedAt, &agent.Version,
 	)
 	return agent, err
+}
+
+func scanApproval(row rowScanner) (domain.Approval, error) {
+	var approval domain.Approval
+	err := row.Scan(&approval.ID, &approval.ServerID, &approval.ToolName, &approval.Arguments,
+		&approval.ArgumentsHash, &approval.Reason, &approval.Status, &approval.RequestedBy,
+		&approval.DecidedBy, &approval.CreatedAt, &approval.ExpiresAt, &approval.DecidedAt,
+		&approval.ConsumedAt, &approval.Version)
+	return approval, err
 }
 
 var _ store.Repository = (*Repository)(nil)

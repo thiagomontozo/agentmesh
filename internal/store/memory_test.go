@@ -38,6 +38,47 @@ func TestMemoryAgentLifecycle(t *testing.T) {
 	}
 }
 
+func TestMemoryApprovalDecisionAndAtomicSingleUse(t *testing.T) {
+	memory := NewMemory()
+	ctx := context.Background()
+	now := time.Now().UTC()
+	approval := domain.Approval{ID: "apr_1", ServerID: "tools", ToolName: "deploy", RequestedBy: "operator", Arguments: []byte(`{"target":"prod"}`)}
+	if err := approval.Initialize(now, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := memory.CreateApproval(ctx, approval, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := memory.DecideApproval(ctx, approval.ID, true, "admin", now); err != nil {
+		t.Fatal(err)
+	}
+	errorsChannel := make(chan error, 2)
+	var wait sync.WaitGroup
+	for range 2 {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			_, err := memory.ConsumeApproval(ctx, approval.ID, approval.ServerID, approval.ToolName, approval.ArgumentsHash, now)
+			errorsChannel <- err
+		}()
+	}
+	wait.Wait()
+	close(errorsChannel)
+	succeeded, rejected := 0, 0
+	for err := range errorsChannel {
+		if err == nil {
+			succeeded++
+		} else if errors.Is(err, ErrApprovalNotApproved) {
+			rejected++
+		} else {
+			t.Fatalf("unexpected consume error: %v", err)
+		}
+	}
+	if succeeded != 1 || rejected != 1 {
+		t.Fatalf("expected one atomic consumption, got success=%d rejected=%d", succeeded, rejected)
+	}
+}
+
 func TestMemoryWorkflowLifecycleAndIsolation(t *testing.T) {
 	ctx := context.Background()
 	memory := NewMemory()

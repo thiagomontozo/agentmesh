@@ -136,6 +136,12 @@ expiration returns `504`, and upstream protocol/transport failures return
 `502`. See [MCP tool gateway](mcp-tools.md) for registry configuration,
 authentication, protocol revision, and the synchronous JSON boundary.
 
+Protected tools return `428` without an approved `approval_id`. Manage their
+persisted lifecycle through `POST/GET /api/v1/approvals`,
+`GET /api/v1/approvals/{id}`, and the admin-only `POST
+/api/v1/approvals/{id}/approve|reject` actions. See
+[Human approval gates](human-approvals.md).
+
 ## Runs
 
 Submit an asynchronous run:

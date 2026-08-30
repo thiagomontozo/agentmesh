@@ -14,6 +14,10 @@ var ErrRunNotExecutable = errors.New("run is not executable")
 var ErrConflict = errors.New("concurrent update conflict")
 var ErrAgentInUse = errors.New("agent has dependent runs")
 var ErrChildRunLimit = errors.New("parent Run child limit reached")
+var ErrApprovalNotPending = errors.New("approval is not pending")
+var ErrApprovalNotApproved = errors.New("approval is not approved")
+var ErrApprovalExpired = errors.New("approval expired")
+var ErrApprovalMismatch = errors.New("approval does not match tool call")
 
 type PendingRun struct {
 	ID     string
@@ -72,11 +76,20 @@ type AuditRepository interface {
 	ListAuditEvents(ctx context.Context, limit int) ([]domain.AuditEvent, error)
 }
 
+type ApprovalRepository interface {
+	CreateApproval(ctx context.Context, approval domain.Approval, retention time.Duration) (domain.Approval, error)
+	GetApproval(ctx context.Context, id string) (domain.Approval, error)
+	ListApprovals(ctx context.Context, status domain.ApprovalStatus, limit int) ([]domain.Approval, error)
+	DecideApproval(ctx context.Context, id string, approve bool, actor string, now time.Time) (domain.Approval, error)
+	ConsumeApproval(ctx context.Context, id, serverID, toolName, argumentsHash string, now time.Time) (domain.Approval, error)
+}
+
 type Repository interface {
 	AgentRepository
 	RunRepository
 	EventRepository
 	WorkflowRepository
 	AuditRepository
+	ApprovalRepository
 	Ping(ctx context.Context) error
 }

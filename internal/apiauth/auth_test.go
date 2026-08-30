@@ -9,10 +9,11 @@ import (
 )
 
 func TestBearerAuthenticationAndRBAC(t *testing.T) {
-	secrets := map[string]string{"READER": "read-token", "OPERATOR": "operate-token", "AGENT": "agent-token"}
+	secrets := map[string]string{"READER": "read-token", "OPERATOR": "operate-token", "ADMIN": "admin-token", "AGENT": "agent-token"}
 	authenticator, err := apiauth.New(`{
 		"reader":{"secret_env":"READER","roles":["reader"]},
 		"operator":{"secret_env":"OPERATOR","roles":["operator"]},
+		"admin":{"secret_env":"ADMIN","roles":["admin"]},
 		"agent-a":{"secret_env":"AGENT","roles":["agent"],"agent_id":"agt_a"}
 	}`, func(name string) (string, bool) { value, ok := secrets[name]; return value, ok })
 	if err != nil {
@@ -48,6 +49,8 @@ func TestBearerAuthenticationAndRBAC(t *testing.T) {
 	assert(http.MethodGet, "/api/v1/agents", "read-token", http.StatusNoContent)
 	assert(http.MethodPost, "/api/v1/agents", "read-token", http.StatusForbidden)
 	assert(http.MethodPost, "/api/v1/agents", "operate-token", http.StatusNoContent)
+	assert(http.MethodPost, "/api/v1/approvals/apr_1/approve", "operate-token", http.StatusForbidden)
+	assert(http.MethodPost, "/api/v1/approvals/apr_1/approve", "admin-token", http.StatusNoContent)
 	response := assert(http.MethodPost, "/api/v1/runs/run_1/children", "agent-token", http.StatusNoContent)
 	if response.Header().Get("X-Test-Subject") != "agent-a" {
 		t.Fatalf("unexpected authenticated subject: %q", response.Header().Get("X-Test-Subject"))
