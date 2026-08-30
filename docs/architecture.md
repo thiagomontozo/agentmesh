@@ -165,6 +165,16 @@ Condition definitions are normalized and validated before persistence. PostgreSQ
 
 This remains a finite DAG scheduler. Loops, dynamic Steps, compensations, arbitrary aggregation, nested expressions, and LLM planning remain out of scope.
 
+## Agent-to-Agent calls
+
+An Agent can request another Agent only through `POST /api/v1/runs/{parent_id}/children`. AgentMesh validates the running parent, resolves the target by explicit Agent ID or the existing deterministic capability Router, creates a normal child Run, persists lineage/correlation, publishes audit events, and sends it through the existing Engine. Agents do not receive a direct execution bypass around queueing, runtime resolution, leases, retries, fencing, or observability.
+
+Every call requires `Idempotency-Key`; AgentMesh scopes it to the parent Run. Memory and PostgreSQL provide `CreateChildRun`, which serializes direct-child admission and atomically enforces `AGENTMESH_AGENT_CALL_MAX_CHILDREN`. Replays return the original child even after the parent becomes terminal. A changed replay returns conflict.
+
+An ancestry walk limits depth with `AGENTMESH_AGENT_CALL_MAX_DEPTH`, rejects corrupt Run cycles, and prevents the target Agent ID from appearing anywhere in the ancestor chain. This blocks direct and indirect Agent loops while preserving immutable `parent_run_id`/`root_run_id`. The child inherits the originating `request_id`. Parent history receives both `run.child_queued` and `run.agent_call_queued`.
+
+The current identity boundary is deliberately minimal: `X-AgentMesh-Caller-Agent-ID` must equal the parent Run's Agent ID. This is an identity assertion, not cryptographic authentication, and is suitable only behind a trusted network/API gateway. Bearer/API-key/mTLS authentication remains the responsibility of the later AgentMesh-to-Agent authentication increment. Deployments must not expose this endpoint to untrusted callers without external authentication.
+
 ## Agent Registry lifecycle
 
 Agent definitions have immutable `id` and `created_at`, mutable execution metadata, `updated_at`, and a monotonic `version`. `PUT` performs a validated full replacement, while Memory and PostgreSQL compare the supplied version atomically before incrementing it. API mutations require a strong numeric `If-Match`, so concurrent writers cannot silently overwrite each other. Redis is refreshed after success and invalidated after conflicts to avoid retaining stale versions.

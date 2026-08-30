@@ -536,6 +536,72 @@ func (r *Repository) CreateRun(ctx context.Context, run domain.Run, idempotencyK
 	return existing, false, nil
 }
 
+func (r *Repository) CreateChildRun(ctx context.Context, run domain.Run, idempotencyKey string, maxChildren int) (domain.Run, bool, error) {
+	if run.ParentRunID == "" {
+		return domain.Run{}, false, fmt.Errorf("parent_run_id is required")
+	}
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return domain.Run{}, false, fmt.Errorf("begin child Run creation: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	parent, err := scanRun(tx.QueryRow(ctx, runSelect+" WHERE id = $1 FOR UPDATE", run.ParentRunID))
+	if err == pgx.ErrNoRows {
+		return domain.Run{}, false, store.ErrNotFound
+	}
+	if err != nil {
+		return domain.Run{}, false, fmt.Errorf("lock parent Run: %w", err)
+	}
+	if idempotencyKey != "" {
+		existing, lookupErr := scanRun(tx.QueryRow(ctx, runSelect+" WHERE idempotency_key = $1", idempotencyKey))
+		if lookupErr == nil {
+			return existing, false, nil
+		}
+		if lookupErr != pgx.ErrNoRows {
+			return domain.Run{}, false, fmt.Errorf("select idempotent child Run: %w", lookupErr)
+		}
+	}
+	if maxChildren > 0 {
+		var count int
+		if err := tx.QueryRow(ctx, "SELECT count(*) FROM runs WHERE parent_run_id = $1", run.ParentRunID).Scan(&count); err != nil {
+			return domain.Run{}, false, fmt.Errorf("count child Runs: %w", err)
+		}
+		if count >= maxChildren {
+			return domain.Run{}, false, store.ErrChildRunLimit
+		}
+	}
+	providedRoot := run.RootRunID
+	if err := run.AttachTo(parent); err != nil {
+		return domain.Run{}, false, err
+	}
+	if providedRoot != "" && providedRoot != run.RootRunID {
+		return domain.Run{}, false, fmt.Errorf("root_run_id does not match parent lineage")
+	}
+	var key any
+	if idempotencyKey != "" {
+		key = idempotencyKey
+	}
+	requiredCapabilities := run.RequiredCapabilities
+	if requiredCapabilities == nil {
+		requiredCapabilities = []string{}
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO runs (
+		id, agent_id, parent_run_id, root_run_id, required_capabilities,
+		input, output, status, error, attempt, max_attempts,
+		request_id, duration_ms, idempotency_key, created_at, started_at, completed_at
+	) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
+		run.ID, run.AgentID, run.ParentRunID, run.RootRunID, requiredCapabilities,
+		run.Input, run.Output, run.Status, run.Error, run.Attempt, run.MaxAttempts,
+		run.RequestID, run.DurationMS, key, run.CreatedAt, run.StartedAt, run.CompletedAt,
+	); err != nil {
+		return domain.Run{}, false, fmt.Errorf("insert child Run: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return domain.Run{}, false, fmt.Errorf("commit child Run creation: %w", err)
+	}
+	return run, true, nil
+}
+
 const runSelect = `SELECT id, agent_id, COALESCE(parent_run_id, ''), COALESCE(root_run_id, ''),
 	required_capabilities, input, output, status, error, attempt, max_attempts,
 	request_id, duration_ms, created_at, started_at, completed_at FROM runs`

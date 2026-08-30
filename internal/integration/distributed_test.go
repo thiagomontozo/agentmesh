@@ -326,6 +326,23 @@ func TestDistributedRunLifecycleAndIdempotency(t *testing.T) {
 		lineageEvents[0].RootRunID != lineageRoot.ID {
 		t.Fatalf("PostgreSQL lineage event persistence: events=%+v err=%v", lineageEvents, err)
 	}
+	agentCallParent := domain.Run{ID: "run_agent_call_parent_" + suffix, AgentID: agent.ID, Status: domain.RunRunning, MaxAttempts: 1, CreatedAt: time.Now().UTC()}
+	if _, _, err := repository.CreateRun(ctx, agentCallParent, ""); err != nil {
+		t.Fatal(err)
+	}
+	agentCallChild := domain.Run{ID: "run_agent_call_child_" + suffix, AgentID: configuredAgent.ID, ParentRunID: agentCallParent.ID, Status: domain.RunQueued, MaxAttempts: 1, CreatedAt: time.Now().UTC()}
+	boundedChild, isNew, err := repository.CreateChildRun(ctx, agentCallChild, "agent-call-integration-"+suffix, 1)
+	if err != nil || !isNew || boundedChild.RootRunID != agentCallParent.ID {
+		t.Fatalf("create bounded PostgreSQL child Run: child=%+v new=%v err=%v", boundedChild, isNew, err)
+	}
+	if replayedChild, replayedNew, err := repository.CreateChildRun(ctx, agentCallChild, "agent-call-integration-"+suffix, 1); err != nil || replayedNew || replayedChild.ID != boundedChild.ID {
+		t.Fatalf("replay bounded PostgreSQL child Run: child=%+v new=%v err=%v", replayedChild, replayedNew, err)
+	}
+	secondAgentCallChild := agentCallChild
+	secondAgentCallChild.ID = "run_agent_call_child_2_" + suffix
+	if _, _, err := repository.CreateChildRun(ctx, secondAgentCallChild, "agent-call-integration-2-"+suffix, 1); !errors.Is(err, store.ErrChildRunLimit) {
+		t.Fatalf("expected PostgreSQL child limit, got %v", err)
+	}
 	testRedisLeaseRenewal(t, ctx, redisCache, "integration:"+suffix)
 	testDistributedEventBus(t, natsURL, repository, agent.ID, "run_events_"+suffix)
 	testDistributedSSE(t, natsURL, repository, runEngine, agent.ID, suffix)

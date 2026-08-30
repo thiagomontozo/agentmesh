@@ -93,6 +93,7 @@ The Engine resolves the already-selected Agent's runtime through a concurrency-s
 - Persisted Workflow V1 DAG definitions with explicit input sources
 - Bounded Workflow DAG execution with sequential, fan-out, and fan-in Steps
 - Deterministic Workflow conditions and branching without `eval`
+- Control-plane-mediated Agent-to-Agent child Runs with bounded depth and fan-out
 - Restart recovery for queued/running work
 
 ## API
@@ -111,6 +112,7 @@ The Engine resolves the already-selected Agent's runtime through a concurrency-s
 | `GET` | `/api/v1/runs` | List runs |
 | `GET` | `/api/v1/runs/{id}` | Get run status/result |
 | `GET` | `/api/v1/runs/{id}/children` | List direct child Runs |
+| `POST` | `/api/v1/runs/{id}/children` | Request an Agent-to-Agent child Run through AgentMesh |
 | `POST` | `/api/v1/runs/{id}/cancel` | Cancel a queued or running Run |
 | `GET` | `/api/v1/runs/{id}/events` | Stream lifecycle events via SSE |
 | `POST` | `/api/v1/workflows` | Create a validated Workflow DAG definition |
@@ -170,6 +172,8 @@ With the server running in one terminal:
 | `AGENTMESH_MODE` | `memory` | `memory` or `distributed` runtime |
 | `AGENTMESH_WORKERS` | `4` | Worker goroutines |
 | `AGENTMESH_WORKFLOW_CONCURRENCY` | `4` | Maximum active Steps per Workflow |
+| `AGENTMESH_AGENT_CALL_MAX_DEPTH` | `8` | Maximum Agent-to-Agent ancestry depth |
+| `AGENTMESH_AGENT_CALL_MAX_CHILDREN` | `16` | Maximum direct Agent-call children per parent Run |
 | `AGENTMESH_QUEUE_SIZE` | `128` | In-memory run queue capacity |
 | `AGENTMESH_EXECUTION_DELAY` | `750ms` | Demo executor latency |
 | `AGENTMESH_ATTEMPT_TIMEOUT` | `30s` | Maximum duration of each execution attempt |

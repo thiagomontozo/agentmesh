@@ -147,6 +147,27 @@ curl http://localhost:8080/api/v1/runs/run_PARENT/children
 
 The endpoint does not recursively return grandchildren. A parent stream receives `run.child_queued` containing `child_run_id`, and child lifecycle events carry `parent_run_id` and `root_run_id`.
 
+### Agent-to-Agent child Runs
+
+A currently running Agent may ask AgentMesh to execute another Agent without calling that Agent directly:
+
+```bash
+curl -X POST http://localhost:8080/api/v1/runs/run_PARENT/children \
+  -H 'Content-Type: application/json' \
+  -H 'X-AgentMesh-Caller-Agent-ID: agt_CALLER' \
+  -H 'Idempotency-Key: lookup-legal-records-1' \
+  -d '{
+    "required_capabilities":["legal-search"],
+    "input":"Find related decisions."
+  }'
+```
+
+The request may use `agent_id` instead of `required_capabilities`. The parent must be `running`, the asserted caller must match its Agent ID, and `Idempotency-Key` is mandatory. Successful creation returns `202`; an identical replay returns `200` with `Idempotency-Replayed: true`.
+
+AgentMesh inherits `request_id`, derives parent/root lineage, prevents an Agent ID from repeating in the ancestry, enforces configured depth/direct-child limits, and emits `run.agent_call_queued` on the parent. Direct-child admission is atomic in Memory and PostgreSQL.
+
+`X-AgentMesh-Caller-Agent-ID` is not authentication. It is a temporary identity assertion for trusted networks until protocol authentication is implemented. Protect this endpoint with an authenticated gateway and do not expose it directly to untrusted clients.
+
 Run status progresses through `queued`, `running`, and a terminal state: `succeeded`, `failed`, or `canceled`. The response includes `request_id`, `attempt`, `max_attempts`, lifecycle timestamps, and `duration_ms`. Duration is explicit after a terminal transition and measures execution time from `started_at`, or total queued lifetime if execution never started.
 
 ```bash

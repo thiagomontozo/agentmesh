@@ -53,6 +53,7 @@
 - [x] Sequential Workflow execution through Runs
 - [x] Workflow fan-out/fan-in execution with bounded concurrency and fail-fast cancellation
 - [x] Deterministic Workflow conditions and branching with skipped Steps
+- [x] Control-plane-mediated Agent-to-Agent child Runs with bounded recursion/fan-out
 - [ ] Authentication
 - [ ] RBAC
 - [ ] Audit log
