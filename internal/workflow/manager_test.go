@@ -3,6 +3,7 @@ package workflow
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -47,10 +48,7 @@ func TestSequentialWorkflowPropagatesOutputsThroughRuns(t *testing.T) {
 	if second.ParentRunID != first.ID || second.RootRunID != first.ID {
 		t.Fatalf("workflow Runs did not reuse lineage: first=%+v second=%+v", first, second)
 	}
-	events, err := repository.ListWorkflowEvents(context.Background(), workflow.ID, 100)
-	if err != nil {
-		t.Fatal(err)
-	}
+	events := waitForWorkflowEvent(t, repository, workflow.ID, "workflow.succeeded")
 	if len(events) < 5 || events[0].Type != "workflow.started" || events[len(events)-1].Type != "workflow.succeeded" {
 		t.Fatalf("unexpected Workflow events: %+v", events)
 	}
@@ -240,6 +238,83 @@ func TestWorkflowFanOutFailureCancelsSiblingAndFanIn(t *testing.T) {
 	}
 }
 
+func TestWorkflowConditionsSelectOneBranchWithoutEval(t *testing.T) {
+	repository := store.NewMemory()
+	for _, id := range []string{"agt_classifier", "agt_yes", "agt_no", "agt_join"} {
+		_, _ = repository.CreateAgent(context.Background(), domain.Agent{ID: id, Name: id})
+	}
+	var callsMu sync.Mutex
+	calls := make(map[string]int)
+	executor := executorFunc(func(_ context.Context, agent domain.Agent, input string) (string, error) {
+		callsMu.Lock()
+		calls[agent.ID]++
+		callsMu.Unlock()
+		if agent.ID == "agt_classifier" {
+			return "legal", nil
+		}
+		return agent.ID + ":" + input, nil
+	})
+	runEngine := engine.New(repository, events.NewBus(), executor, queue.NewMemory(16), coordination.NewMemory(), 3, engine.RetryPolicy{
+		MaxAttempts: 1, InitialBackoff: time.Millisecond, MaxBackoff: time.Millisecond, LeaseTTL: time.Minute, AttemptTimeout: time.Second,
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	runEngine.Start(ctx)
+	manager := NewWithConcurrency(repository, runEngine, 3)
+	manager.Run(ctx)
+	defer func() { cancel(); manager.Stop(); runEngine.Stop() }()
+	w, err := repository.CreateWorkflow(context.Background(), domain.Workflow{ID: "wf_condition", Steps: []domain.WorkflowStep{
+		{ID: "classify", AgentID: "agt_classifier", Input: "request"},
+		{ID: "legal", AgentID: "agt_yes", Input: "selected", DependsOn: []string{"classify"}, Condition: &domain.WorkflowCondition{Source: "classify", Operator: "equals", Value: "legal"}},
+		{ID: "other", AgentID: "agt_no", Input: "selected", DependsOn: []string{"classify"}, Condition: &domain.WorkflowCondition{Source: "classify", Operator: "not-equals", Value: "legal"}},
+		{ID: "join", AgentID: "agt_join", InputFrom: []string{"legal", "other"}, InputAggregation: "json-array", DependsOn: []string{"legal", "other"}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.StartWorkflow(context.Background(), w.ID); err != nil {
+		t.Fatal(err)
+	}
+	completed := waitForWorkflow(t, repository, w.ID, domain.WorkflowSucceeded)
+	if completed.Steps[1].Status != domain.WorkflowStepSucceeded || completed.Steps[2].Status != domain.WorkflowStepSkipped || completed.Steps[2].RunID != "" {
+		t.Fatalf("unexpected branch states: %+v", completed)
+	}
+	callsMu.Lock()
+	noCalls := calls["agt_no"]
+	joinCalls := calls["agt_join"]
+	callsMu.Unlock()
+	if noCalls != 0 || joinCalls != 1 {
+		t.Fatalf("condition executed wrong Agents: calls=%+v", calls)
+	}
+	if completed.Steps[3].Output != `agt_join:["agt_yes:selected",""]` {
+		t.Fatalf("unexpected skipped-branch aggregation: %q", completed.Steps[3].Output)
+	}
+	events, err := repository.ListWorkflowEvents(context.Background(), w.ID, 100)
+	if err != nil || !slices.ContainsFunc(events, func(event domain.WorkflowEvent) bool {
+		return event.StepID == "other" && event.Type == "workflow.step_skipped"
+	}) {
+		t.Fatalf("missing skipped event: events=%+v err=%v", events, err)
+	}
+}
+
+func TestConditionOperators(t *testing.T) {
+	tests := []struct {
+		actual string
+		op     string
+		value  string
+		want   bool
+	}{
+		{actual: "legal-case", op: "equals", value: "legal-case", want: true},
+		{actual: "legal-case", op: "not-equals", value: "code", want: true},
+		{actual: "legal-case", op: "contains", value: "legal", want: true},
+		{actual: "legal-case", op: "not-contains", value: "medical", want: true},
+	}
+	for _, test := range tests {
+		if got := evaluateCondition(test.actual, domain.WorkflowCondition{Operator: test.op, Value: test.value}); got != test.want {
+			t.Fatalf("operator %s returned %v", test.op, got)
+		}
+	}
+}
+
 func TestSequentialWorkflowRecoveryResumesAssignedRun(t *testing.T) {
 	repository, runEngine, manager, stop := newWorkflowHarness(t, executorFunc(func(_ context.Context, agent domain.Agent, input string) (string, error) {
 		return agent.ID + "(" + input + ")", nil
@@ -375,6 +450,23 @@ func waitForStepStatus(t *testing.T, repository store.Repository, id string, sta
 		time.Sleep(5 * time.Millisecond)
 	}
 	t.Fatalf("no Step reached %s", status)
+}
+
+func waitForWorkflowEvent(t *testing.T, repository store.Repository, id, eventType string) []domain.WorkflowEvent {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		events, err := repository.ListWorkflowEvents(context.Background(), id, 100)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if slices.ContainsFunc(events, func(event domain.WorkflowEvent) bool { return event.Type == eventType }) {
+			return events
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("Workflow %s did not emit %s", id, eventType)
+	return nil
 }
 
 func TestResolveInput(t *testing.T) {

@@ -155,7 +155,15 @@ The initial partial-failure policy is fail-fast: one failed/canceled branch make
 
 Workflow and Step transition events are stored in Memory or the bounded PostgreSQL `workflow_events` table. The Workflow SSE endpoint polls this authoritative history, which makes events visible across API replicas without adding a second NATS subject. Polling and client writes are outside execution goroutines, so a slow SSE client cannot block Workflow progress.
 
-This is a finite DAG scheduler only. Loops, conditions, dynamic Steps, compensations, arbitrary aggregation, and LLM planning remain out of scope.
+## Deterministic conditions and branching
+
+A Step may declare one optional condition with a source, controlled operator, and literal comparison value. The source is either `workflow` or one of the Step's declared dependencies. Supported operators are `equals`, `not-equals`, `contains`, and `not-contains`; comparisons are case-sensitive and operate on the complete persisted string. There is no expression parser, `eval`, regex engine, user code, or implicit type coercion.
+
+Conditions are evaluated only after every dependency is `succeeded` or `skipped`. A false result moves the Step directly from `pending` to terminal `skipped`, records `completed_at`, emits `workflow.step_skipped`, and creates no Run. A skipped dependency satisfies the DAG barrier. When explicitly used by `input_from`, its value is the empty string; JSON-array fan-in therefore preserves the branch position rather than silently removing it.
+
+Condition definitions are normalized and validated before persistence. PostgreSQL migration `015_workflow_conditions.sql` adds the three nullable condition fields and extends the Step status constraint. Memory deep-copies the condition to prevent mutation through returned pointers.
+
+This remains a finite DAG scheduler. Loops, dynamic Steps, compensations, arbitrary aggregation, nested expressions, and LLM planning remain out of scope.
 
 ## Agent Registry lifecycle
 

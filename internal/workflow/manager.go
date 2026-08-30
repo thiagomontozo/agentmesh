@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -184,6 +185,16 @@ func (m *Manager) reconcile(ctx context.Context, id string) error {
 			m.emitStepTransitions(ctx, updated, previousStatuses)
 			continue
 		}
+		if applyConditions(&candidate) {
+			updated, err := m.store.UpdateWorkflow(ctx, candidate, candidate.Version)
+			if errors.Is(err, store.ErrConflict) {
+				continue
+			} else if err != nil {
+				return err
+			}
+			m.emitStepTransitions(ctx, updated, previousStatuses)
+			continue
+		}
 		if activeStepCount(candidate) >= m.concurrency {
 			if err := wait(ctx, m.poll); err != nil {
 				return err
@@ -239,6 +250,9 @@ func (m *Manager) refreshSteps(ctx context.Context, workflow *domain.Workflow) (
 	allSucceeded := true
 	for index := range workflow.Steps {
 		step := &workflow.Steps[index]
+		if step.Status == domain.WorkflowStepSkipped {
+			continue
+		}
 		if step.RunID == "" {
 			allSucceeded = false
 			continue
@@ -264,7 +278,7 @@ func (m *Manager) refreshSteps(ctx context.Context, workflow *domain.Workflow) (
 			step.StartedAt, step.CompletedAt = run.StartedAt, run.CompletedAt
 		}
 		changed = changed || previous != step.Status
-		if step.Status != domain.WorkflowStepSucceeded {
+		if step.Status != domain.WorkflowStepSucceeded && step.Status != domain.WorkflowStepSkipped {
 			allSucceeded = false
 		}
 		if step.Status == domain.WorkflowStepFailed || step.Status == domain.WorkflowStepCanceled {
@@ -345,7 +359,7 @@ func readyStep(workflow domain.Workflow) int {
 		}
 		ready := true
 		for _, dependency := range step.DependsOn {
-			if statuses[dependency] != domain.WorkflowStepSucceeded {
+			if statuses[dependency] != domain.WorkflowStepSucceeded && statuses[dependency] != domain.WorkflowStepSkipped {
 				ready = false
 				break
 			}
@@ -360,11 +374,15 @@ func readyStep(workflow domain.Workflow) int {
 func resolveInput(workflow domain.Workflow, step domain.WorkflowStep) (string, string, error) {
 	parentRunID := ""
 	if len(step.DependsOn) > 0 {
-		dependency := findStep(workflow, step.DependsOn[0])
-		if dependency == nil || dependency.Status != domain.WorkflowStepSucceeded {
-			return "", "", fmt.Errorf("step %s dependency is not complete", step.ID)
+		for _, dependencyID := range step.DependsOn {
+			dependency := findStep(workflow, dependencyID)
+			if dependency == nil || (dependency.Status != domain.WorkflowStepSucceeded && dependency.Status != domain.WorkflowStepSkipped) {
+				return "", "", fmt.Errorf("step %s dependency is not complete", step.ID)
+			}
+			if parentRunID == "" && dependency.RunID != "" {
+				parentRunID = dependency.RunID
+			}
 		}
-		parentRunID = dependency.RunID
 	}
 	if len(step.InputFrom) == 0 {
 		return step.Input, parentRunID, nil
@@ -376,7 +394,7 @@ func resolveInput(workflow domain.Workflow, step domain.WorkflowStep) (string, s
 			continue
 		}
 		source := findStep(workflow, sourceID)
-		if source == nil || source.Status != domain.WorkflowStepSucceeded {
+		if source == nil || (source.Status != domain.WorkflowStepSucceeded && source.Status != domain.WorkflowStepSkipped) {
 			return "", "", fmt.Errorf("step %s input source %s is not complete", step.ID, sourceID)
 		}
 		values = append(values, source.Output)
@@ -392,6 +410,60 @@ func resolveInput(workflow domain.Workflow, step domain.WorkflowStep) (string, s
 		return "", "", fmt.Errorf("aggregate step %s input: %w", step.ID, err)
 	}
 	return string(aggregated), parentRunID, nil
+}
+
+func applyConditions(workflow *domain.Workflow) bool {
+	statuses := stepStatuses(*workflow)
+	changed := false
+	now := time.Now().UTC()
+	for index := range workflow.Steps {
+		step := &workflow.Steps[index]
+		if step.Status != domain.WorkflowStepPending || step.Condition == nil {
+			continue
+		}
+		dependenciesComplete := true
+		for _, dependency := range step.DependsOn {
+			status := statuses[dependency]
+			if status != domain.WorkflowStepSucceeded && status != domain.WorkflowStepSkipped {
+				dependenciesComplete = false
+				break
+			}
+		}
+		if !dependenciesComplete {
+			continue
+		}
+		actual := workflow.Input
+		if step.Condition.Source != domain.WorkflowInputSource {
+			source := findStep(*workflow, step.Condition.Source)
+			if source == nil {
+				continue
+			}
+			actual = source.Output
+		}
+		if evaluateCondition(actual, *step.Condition) {
+			continue
+		}
+		step.Status = domain.WorkflowStepSkipped
+		step.CompletedAt = &now
+		changed = true
+		statuses[step.ID] = step.Status
+	}
+	return changed
+}
+
+func evaluateCondition(actual string, condition domain.WorkflowCondition) bool {
+	switch condition.Operator {
+	case domain.WorkflowConditionEquals:
+		return actual == condition.Value
+	case domain.WorkflowConditionNotEquals:
+		return actual != condition.Value
+	case domain.WorkflowConditionContains:
+		return strings.Contains(actual, condition.Value)
+	case domain.WorkflowConditionNotContains:
+		return !strings.Contains(actual, condition.Value)
+	default:
+		return false
+	}
 }
 
 func findStep(workflow domain.Workflow, id string) *domain.WorkflowStep {

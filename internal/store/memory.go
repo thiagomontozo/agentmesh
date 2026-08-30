@@ -556,6 +556,10 @@ func cloneWorkflow(workflow domain.Workflow) domain.Workflow {
 	for index := range workflow.Steps {
 		workflow.Steps[index].DependsOn = append([]string(nil), workflow.Steps[index].DependsOn...)
 		workflow.Steps[index].InputFrom = append([]string(nil), workflow.Steps[index].InputFrom...)
+		if workflow.Steps[index].Condition != nil {
+			condition := *workflow.Steps[index].Condition
+			workflow.Steps[index].Condition = &condition
+		}
 	}
 	return workflow
 }

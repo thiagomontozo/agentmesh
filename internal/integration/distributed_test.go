@@ -347,7 +347,7 @@ func TestPostgreSQLWorkflowDefinitionPersistence(t *testing.T) {
 	}
 	want, err := repository.CreateWorkflow(ctx, domain.Workflow{ID: "wf_" + suffix, Input: "document", Steps: []domain.WorkflowStep{
 		{ID: "extract", AgentID: "agt_wf_a_" + suffix, InputFrom: []string{"workflow"}},
-		{ID: "review", AgentID: "agt_wf_b_" + suffix, DependsOn: []string{"extract"}, InputFrom: []string{"extract"}},
+		{ID: "review", AgentID: "agt_wf_b_" + suffix, DependsOn: []string{"extract"}, InputFrom: []string{"extract"}, Condition: &domain.WorkflowCondition{Source: "extract", Operator: "contains", Value: "legal"}},
 	}})
 	if err != nil {
 		t.Fatal(err)
@@ -356,7 +356,8 @@ func TestPostgreSQLWorkflowDefinitionPersistence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Status != domain.WorkflowPending || len(got.Steps) != 2 || !slices.Equal(got.Steps[1].DependsOn, []string{"extract"}) {
+	if got.Status != domain.WorkflowPending || len(got.Steps) != 2 || !slices.Equal(got.Steps[1].DependsOn, []string{"extract"}) ||
+		got.Steps[1].Condition == nil || got.Steps[1].Condition.Operator != "contains" || got.Steps[1].Condition.Value != "legal" {
 		t.Fatalf("unexpected PostgreSQL Workflow: %+v", got)
 	}
 	listed, err := repository.ListWorkflows(ctx)

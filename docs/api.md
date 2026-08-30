@@ -218,6 +218,24 @@ The start response is `202 Accepted`. Workflow state progresses `pending → run
 
 Ready Steps execute concurrently up to `AGENTMESH_WORKFLOW_CONCURRENCY` (default `4`). Fan-out children can run in parallel. A fan-in Step waits for every declared dependency; multiple `input_from` outputs become a JSON string array in declaration order. One branch failure uses fail-fast behavior: active sibling Runs and pending descendants are canceled, and the Workflow becomes failed.
 
+Add deterministic branching with a condition on the Workflow input or a declared dependency:
+
+```json
+{
+  "id": "legal-branch",
+  "agent_id": "agt_LEGAL",
+  "depends_on": ["classifier"],
+  "input": "process selected branch",
+  "condition": {
+    "source": "classifier",
+    "operator": "equals",
+    "value": "legal"
+  }
+}
+```
+
+Operators are `equals`, `not-equals`, `contains`, and `not-contains`. Matching is case-sensitive and deterministic. A false condition produces `status: "skipped"`, emits `workflow.step_skipped`, and does not create a Run. The condition source must be `workflow` or a Step already present in `depends_on`. Arbitrary expressions, regex, `eval`, and executable user input are rejected/not supported.
+
 Cancel a pending or running Workflow:
 
 ```bash

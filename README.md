@@ -92,6 +92,7 @@ The Engine resolves the already-selected Agent's runtime through a concurrency-s
 - Immutable parent/root Run lineage with direct-child lookup and events
 - Persisted Workflow V1 DAG definitions with explicit input sources
 - Bounded Workflow DAG execution with sequential, fan-out, and fan-in Steps
+- Deterministic Workflow conditions and branching without `eval`
 - Restart recovery for queued/running work
 
 ## API
