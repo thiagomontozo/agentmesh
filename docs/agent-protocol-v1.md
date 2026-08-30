@@ -72,6 +72,14 @@ credentials in protocol errors or outputs.
 | `error` | object | on failure | Structured failure; forbidden on success. |
 | `error.code` | string | on failure | Stable machine-readable code chosen by the Agent. |
 | `error.message` | string | on failure | Human-readable diagnostic without secrets. |
+
+## Version compatibility
+
+V1 uses the required body field and the additive
+`Agent-Protocol-Version: 1` request header. Unsupported versions use the stable
+`unsupported_protocol_version` error code and are never silently downgraded.
+Backward-compatibility rules and the future V2 extension path are specified in
+[Agent Protocol versioning](protocol-versioning.md).
 | `error.retryable` | boolean | on failure | Whether retrying may succeed. This is advisory; AgentMesh owns retry policy. |
 
 The AgentMesh HTTP runtime validates the HTTP status, JSON syntax, response size, media type, protocol version, and matching `run_id`. It does not follow redirects.

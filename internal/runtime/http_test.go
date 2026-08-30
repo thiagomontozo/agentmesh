@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/thiagomontozo/agentmesh/internal/domain"
+	"github.com/thiagomontozo/agentmesh/internal/protocol"
 	protocolv1 "github.com/thiagomontozo/agentmesh/internal/protocol/v1"
 	agentruntime "github.com/thiagomontozo/agentmesh/internal/runtime"
 )
@@ -26,6 +27,9 @@ func TestHTTPRuntimeSuccess(t *testing.T) {
 		}
 		if request.Header.Get("Content-Type") != "application/json" || request.Header.Get("Accept") != "application/json" {
 			t.Errorf("unexpected content negotiation headers: %v", request.Header)
+		}
+		if request.Header.Get(protocol.HeaderVersion) != protocolv1.Version {
+			t.Errorf("unexpected protocol version header: %q", request.Header.Get(protocol.HeaderVersion))
 		}
 		var payload protocolv1.RunRequest
 		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
@@ -129,6 +133,18 @@ func TestHTTPRuntimeRejectsMismatchedRunID(t *testing.T) {
 
 	_, err := executeRemote(context.Background(), agentruntime.NewHTTPRuntime(server.Client(), 0), server.URL)
 	requireHTTPError(t, err, agentruntime.HTTPErrorProtocol, 0)
+}
+
+func TestHTTPRuntimeClassifiesUnsupportedResponseVersion(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		writeRuntimeResponse(t, response, protocolv1.RunResponse{ProtocolVersion: "2", RunID: "run_1", Status: protocolv1.StatusSucceeded})
+	}))
+	defer server.Close()
+	_, err := executeRemote(context.Background(), agentruntime.NewHTTPRuntime(server.Client(), 0), server.URL)
+	httpError := requireHTTPError(t, err, agentruntime.HTTPErrorProtocol, 0)
+	if httpError.Code != protocol.CodeUnsupportedVersion || !errors.Is(err, protocol.ErrUnsupportedVersion) {
+		t.Fatalf("unexpected version error: %+v", httpError)
+	}
 }
 
 func TestHTTPRuntimeRejectsResponseAboveLimit(t *testing.T) {

@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/thiagomontozo/agentmesh/internal/protocol"
 	protocolv1 "github.com/thiagomontozo/agentmesh/internal/protocol/v1"
 )
 
@@ -37,6 +38,20 @@ func TestRunRequestJSONRoundTrip(t *testing.T) {
 	}
 	if err := decoded.Validate(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestUnsupportedVersionIsTypedAndHasControlledResponse(t *testing.T) {
+	request := protocolv1.RunRequest{ProtocolVersion: "2", RunID: "run_1", AgentID: "agt_1", Attempt: 1, IdempotencyKey: "run_1:1"}
+	if err := request.Validate(); !errors.Is(err, protocol.ErrUnsupportedVersion) || !errors.Is(err, protocolv1.ErrInvalidMessage) {
+		t.Fatalf("expected wrapped version and message errors, got %v", err)
+	}
+	response := protocolv1.UnsupportedVersionResponse("run_1")
+	if err := response.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if response.Error == nil || response.Error.Code != protocol.CodeUnsupportedVersion || response.Error.Retryable {
+		t.Fatalf("unexpected version response: %+v", response)
 	}
 }
 
