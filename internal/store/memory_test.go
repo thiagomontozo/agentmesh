@@ -37,6 +37,48 @@ func TestMemoryAgentLifecycle(t *testing.T) {
 	}
 }
 
+func TestMemoryWorkflowLifecycleAndIsolation(t *testing.T) {
+	ctx := context.Background()
+	memory := NewMemory()
+	for _, agentID := range []string{"agt_a", "agt_b"} {
+		if _, err := memory.CreateAgent(ctx, domain.Agent{ID: agentID, Name: agentID}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	created, err := memory.CreateWorkflow(ctx, domain.Workflow{ID: "wf_1", Input: "request", Steps: []domain.WorkflowStep{
+		{ID: "first", AgentID: "agt_a", InputFrom: []string{"workflow"}},
+		{ID: "second", AgentID: "agt_b", DependsOn: []string{"first"}, InputFrom: []string{"first"}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.Status != domain.WorkflowPending || created.Steps[1].WorkflowID != created.ID {
+		t.Fatalf("unexpected persisted workflow: %+v", created)
+	}
+	created.Steps[0].DependsOn = []string{"mutated"}
+	loaded, err := memory.GetWorkflow(ctx, created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.Steps[0].DependsOn) != 0 {
+		t.Fatalf("stored workflow was mutated through returned slice: %+v", loaded)
+	}
+	listed, err := memory.ListWorkflows(ctx)
+	if err != nil || len(listed) != 1 || listed[0].ID != created.ID {
+		t.Fatalf("unexpected workflow list: %+v err=%v", listed, err)
+	}
+}
+
+func TestMemoryWorkflowRequiresExistingAgent(t *testing.T) {
+	memory := NewMemory()
+	_, err := memory.CreateWorkflow(context.Background(), domain.Workflow{ID: "wf_1", Steps: []domain.WorkflowStep{
+		{ID: "first", AgentID: "missing", Input: "request"},
+	}})
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected missing Agent error, got %v", err)
+	}
+}
+
 func TestMemoryAgentUpdateAndDeleteLifecycle(t *testing.T) {
 	ctx := context.Background()
 	memory := NewMemory()

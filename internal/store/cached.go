@@ -182,6 +182,18 @@ func (c *Cached) ListRunEvents(ctx context.Context, runID string, limit int) ([]
 	return c.inner.ListRunEvents(ctx, runID, limit)
 }
 
+func (c *Cached) CreateWorkflow(ctx context.Context, workflow domain.Workflow) (domain.Workflow, error) {
+	return c.inner.CreateWorkflow(ctx, workflow)
+}
+
+func (c *Cached) GetWorkflow(ctx context.Context, id string) (domain.Workflow, error) {
+	return c.inner.GetWorkflow(ctx, id)
+}
+
+func (c *Cached) ListWorkflows(ctx context.Context) ([]domain.Workflow, error) {
+	return c.inner.ListWorkflows(ctx)
+}
+
 func (c *Cached) Ping(ctx context.Context) error {
 	if err := c.inner.Ping(ctx); err != nil {
 		return err

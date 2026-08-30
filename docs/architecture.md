@@ -135,6 +135,14 @@ Memory and PostgreSQL validate the relationship on creation. PostgreSQL adds sel
 
 This is composition groundwork, not a workflow engine. Parent completion does not trigger children, outputs are not propagated, failure/cancellation does not cascade, and there are no dependencies, DAG scheduling, fan-out/fan-in, conditions, or cycle traversal.
 
+## Workflow Model V1
+
+`domain.Workflow` is a persisted DAG definition containing ordered `WorkflowStep` records. Every Step references an existing Agent, declares deterministic dependencies, and chooses either literal input or explicit `input_from` sources. One source uses `single`; multiple sources must opt into the controlled `json-array` aggregation. Step IDs are normalized, duplicate and missing references are rejected, and Kahn traversal rejects cycles before persistence. Definitions are limited to 100 Steps.
+
+Memory stores isolated deep copies. PostgreSQL migration `013_workflows.sql` stores the Workflow and its ordered Steps transactionally with Agent foreign keys. Agents referenced by Workflow definitions cannot be deleted. The cached repository deliberately forwards Workflow reads to the authoritative store rather than introducing a second invalidation surface.
+
+The API can create, list, and fetch definitions. At this increment every Workflow and Step remains `pending`: there is no start endpoint, scheduler, Run creation, output propagation, recovery, or cancellation yet. Runtime state columns are present to preserve one representation when execution is added, but their lifecycle cannot be mutated through the API.
+
 ## Agent Registry lifecycle
 
 Agent definitions have immutable `id` and `created_at`, mutable execution metadata, `updated_at`, and a monotonic `version`. `PUT` performs a validated full replacement, while Memory and PostgreSQL compare the supplied version atomically before incrementing it. API mutations require a strong numeric `If-Match`, so concurrent writers cannot silently overwrite each other. Redis is refreshed after success and invalidated after conflicts to avoid retaining stale versions.

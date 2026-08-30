@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -50,6 +51,69 @@ func TestHealth(t *testing.T) {
 
 	if response.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", response.Code)
+	}
+}
+
+func TestWorkflowDefinitionHTTP(t *testing.T) {
+	server, _ := newTestServer(t)
+	agentIDs := make([]string, 0, 2)
+	for _, name := range []string{"extractor", "reviewer"} {
+		request := httptest.NewRequest(http.MethodPost, "/api/v1/agents", bytes.NewBufferString(`{"name":"`+name+`"}`))
+		response := httptest.NewRecorder()
+		server.Handler().ServeHTTP(response, request)
+		if response.Code != http.StatusCreated {
+			t.Fatalf("create Agent: %d %s", response.Code, response.Body.String())
+		}
+		var agent domain.Agent
+		if err := json.Unmarshal(response.Body.Bytes(), &agent); err != nil {
+			t.Fatal(err)
+		}
+		agentIDs = append(agentIDs, agent.ID)
+	}
+	body := fmt.Sprintf(`{
+		"input":"document",
+		"steps":[
+			{"id":"extract","agent_id":%q,"input_from":["workflow"]},
+			{"id":"review","agent_id":%q,"depends_on":["extract"],"input_from":["extract"]}
+		]}`, agentIDs[0], agentIDs[1])
+	create := httptest.NewRecorder()
+	server.Handler().ServeHTTP(create, httptest.NewRequest(http.MethodPost, "/api/v1/workflows", strings.NewReader(body)))
+	if create.Code != http.StatusCreated {
+		t.Fatalf("create Workflow: %d %s", create.Code, create.Body.String())
+	}
+	var workflow domain.Workflow
+	if err := json.Unmarshal(create.Body.Bytes(), &workflow); err != nil {
+		t.Fatal(err)
+	}
+	if workflow.Status != domain.WorkflowPending || len(workflow.Steps) != 2 {
+		t.Fatalf("unexpected Workflow response: %+v", workflow)
+	}
+	get := httptest.NewRecorder()
+	server.Handler().ServeHTTP(get, httptest.NewRequest(http.MethodGet, "/api/v1/workflows/"+workflow.ID, nil))
+	if get.Code != http.StatusOK {
+		t.Fatalf("get Workflow: %d %s", get.Code, get.Body.String())
+	}
+	list := httptest.NewRecorder()
+	server.Handler().ServeHTTP(list, httptest.NewRequest(http.MethodGet, "/api/v1/workflows", nil))
+	if list.Code != http.StatusOK || !strings.Contains(list.Body.String(), workflow.ID) {
+		t.Fatalf("list Workflows: %d %s", list.Code, list.Body.String())
+	}
+}
+
+func TestWorkflowDefinitionHTTPRejectsInvalidDAGAndUnknownAgent(t *testing.T) {
+	server, _ := newTestServer(t)
+	for _, test := range []struct {
+		body string
+		want int
+	}{
+		{body: `{"steps":[{"id":"a","agent_id":"missing","input":"x","depends_on":["b"]},{"id":"b","agent_id":"missing","input":"x","depends_on":["a"]}]}`, want: http.StatusBadRequest},
+		{body: `{"steps":[{"id":"a","agent_id":"missing","input":"x"}]}`, want: http.StatusNotFound},
+	} {
+		response := httptest.NewRecorder()
+		server.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/v1/workflows", strings.NewReader(test.body)))
+		if response.Code != test.want {
+			t.Fatalf("expected %d, got %d: %s", test.want, response.Code, response.Body.String())
+		}
 	}
 }
 

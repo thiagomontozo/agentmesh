@@ -242,7 +242,11 @@ func (r *Repository) DeleteAgent(ctx context.Context, id string, expectedVersion
 		return fmt.Errorf("%w: current=%d expected=%d", store.ErrConflict, currentVersion, expectedVersion)
 	}
 	var inUse bool
-	if err := tx.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM runs WHERE agent_id = $1)", id).Scan(&inUse); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (
+		SELECT 1 FROM runs WHERE agent_id = $1
+		UNION ALL
+		SELECT 1 FROM workflow_steps WHERE agent_id = $1
+	)`, id).Scan(&inUse); err != nil {
 		return fmt.Errorf("check agent dependencies: %w", err)
 	}
 	if inUse {
@@ -255,6 +259,108 @@ func (r *Repository) DeleteAgent(ctx context.Context, id string, expectedVersion
 		return fmt.Errorf("commit agent deletion: %w", err)
 	}
 	return nil
+}
+
+func (r *Repository) CreateWorkflow(ctx context.Context, workflow domain.Workflow) (domain.Workflow, error) {
+	if err := workflow.InitializeForCreate(time.Now()); err != nil {
+		return domain.Workflow{}, err
+	}
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return domain.Workflow{}, fmt.Errorf("begin workflow creation: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `INSERT INTO workflows
+		(id, input, status, error, version, created_at, started_at, completed_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+		workflow.ID, workflow.Input, workflow.Status, workflow.Error, workflow.Version,
+		workflow.CreatedAt, workflow.StartedAt, workflow.CompletedAt,
+	); err != nil {
+		return domain.Workflow{}, fmt.Errorf("insert workflow: %w", err)
+	}
+	for position, step := range workflow.Steps {
+		if _, err := tx.Exec(ctx, `INSERT INTO workflow_steps (
+			workflow_id, id, position, agent_id, input, input_from, input_aggregation,
+			depends_on, status, run_id, output, error, created_at, started_at, completed_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
+			step.WorkflowID, step.ID, position, step.AgentID, step.Input, step.InputFrom,
+			step.InputAggregation, step.DependsOn, step.Status, nullableString(step.RunID),
+			step.Output, step.Error, step.CreatedAt, step.StartedAt, step.CompletedAt,
+		); err != nil {
+			return domain.Workflow{}, fmt.Errorf("insert workflow step %s: %w", step.ID, err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return domain.Workflow{}, fmt.Errorf("commit workflow creation: %w", err)
+	}
+	return workflow, nil
+}
+
+const workflowSelect = `SELECT id, input, status, error, version, created_at, started_at, completed_at FROM workflows`
+
+func (r *Repository) GetWorkflow(ctx context.Context, id string) (domain.Workflow, error) {
+	workflow, err := scanWorkflow(r.pool.QueryRow(ctx, workflowSelect+" WHERE id = $1", id))
+	if err == pgx.ErrNoRows {
+		return domain.Workflow{}, store.ErrNotFound
+	}
+	if err != nil {
+		return domain.Workflow{}, fmt.Errorf("select workflow: %w", err)
+	}
+	workflow.Steps, err = r.listWorkflowSteps(ctx, workflow.ID)
+	if err != nil {
+		return domain.Workflow{}, err
+	}
+	return workflow, nil
+}
+
+func (r *Repository) ListWorkflows(ctx context.Context) ([]domain.Workflow, error) {
+	rows, err := r.pool.Query(ctx, workflowSelect+" ORDER BY created_at, id")
+	if err != nil {
+		return nil, fmt.Errorf("list workflows: %w", err)
+	}
+	defer rows.Close()
+	result := make([]domain.Workflow, 0)
+	for rows.Next() {
+		workflow, err := scanWorkflow(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, workflow)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list workflows: %w", err)
+	}
+	for index := range result {
+		result[index].Steps, err = r.listWorkflowSteps(ctx, result[index].ID)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return result, nil
+}
+
+func (r *Repository) listWorkflowSteps(ctx context.Context, workflowID string) ([]domain.WorkflowStep, error) {
+	rows, err := r.pool.Query(ctx, `SELECT id, workflow_id, agent_id, input, input_from,
+		input_aggregation, depends_on, status, COALESCE(run_id, ''), output, error,
+		created_at, started_at, completed_at
+		FROM workflow_steps WHERE workflow_id = $1 ORDER BY position`, workflowID)
+	if err != nil {
+		return nil, fmt.Errorf("list workflow steps: %w", err)
+	}
+	defer rows.Close()
+	steps := make([]domain.WorkflowStep, 0)
+	for rows.Next() {
+		var step domain.WorkflowStep
+		if err := rows.Scan(
+			&step.ID, &step.WorkflowID, &step.AgentID, &step.Input, &step.InputFrom,
+			&step.InputAggregation, &step.DependsOn, &step.Status, &step.RunID,
+			&step.Output, &step.Error, &step.CreatedAt, &step.StartedAt, &step.CompletedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan workflow step: %w", err)
+		}
+		steps = append(steps, step)
+	}
+	return steps, rows.Err()
 }
 
 func (r *Repository) CreateRun(ctx context.Context, run domain.Run, idempotencyKey string) (domain.Run, bool, error) {
@@ -657,6 +763,15 @@ func scanRun(row rowScanner) (domain.Run, error) {
 		&run.CreatedAt, &run.StartedAt, &run.CompletedAt,
 	)
 	return run, err
+}
+
+func scanWorkflow(row rowScanner) (domain.Workflow, error) {
+	var workflow domain.Workflow
+	err := row.Scan(
+		&workflow.ID, &workflow.Input, &workflow.Status, &workflow.Error,
+		&workflow.Version, &workflow.CreatedAt, &workflow.StartedAt, &workflow.CompletedAt,
+	)
+	return workflow, err
 }
 
 func nullableString(value string) any {

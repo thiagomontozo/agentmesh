@@ -78,6 +78,81 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/runs/{id}/children", s.listChildRuns)
 	s.mux.HandleFunc("POST /api/v1/runs/{id}/cancel", s.cancelRun)
 	s.mux.HandleFunc("GET /api/v1/runs/{id}/events", s.runEvents)
+	s.mux.HandleFunc("GET /api/v1/workflows", s.listWorkflows)
+	s.mux.HandleFunc("POST /api/v1/workflows", s.createWorkflow)
+	s.mux.HandleFunc("GET /api/v1/workflows/{id}", s.getWorkflow)
+}
+
+type createWorkflowRequest struct {
+	Input string                      `json:"input"`
+	Steps []createWorkflowStepRequest `json:"steps"`
+}
+
+type createWorkflowStepRequest struct {
+	ID               string   `json:"id"`
+	AgentID          string   `json:"agent_id"`
+	Input            string   `json:"input"`
+	InputFrom        []string `json:"input_from"`
+	InputAggregation string   `json:"input_aggregation"`
+	DependsOn        []string `json:"depends_on"`
+}
+
+func (s *Server) createWorkflow(w http.ResponseWriter, r *http.Request) {
+	var request createWorkflowRequest
+	if err := decodeJSON(r, &request); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	workflow := domain.Workflow{ID: newID("wf"), Input: request.Input, Steps: make([]domain.WorkflowStep, len(request.Steps))}
+	for index, requested := range request.Steps {
+		workflow.Steps[index] = domain.WorkflowStep{
+			ID: requested.ID, AgentID: requested.AgentID, Input: requested.Input,
+			InputFrom: requested.InputFrom, InputAggregation: requested.InputAggregation,
+			DependsOn: requested.DependsOn,
+		}
+	}
+	if err := workflow.InitializeForCreate(time.Now()); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	for _, step := range workflow.Steps {
+		if _, err := s.store.GetAgent(r.Context(), step.AgentID); errors.Is(err, store.ErrNotFound) {
+			writeError(w, http.StatusNotFound, fmt.Sprintf("agent %s not found", step.AgentID))
+			return
+		} else if err != nil {
+			writeError(w, http.StatusInternalServerError, "could not validate workflow agents")
+			return
+		}
+	}
+	created, err := s.store.CreateWorkflow(r.Context(), workflow)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not create workflow")
+		return
+	}
+	slog.InfoContext(r.Context(), "workflow created", append(observability.ContextAttrs(r.Context()), "workflow_id", created.ID, "steps", len(created.Steps))...)
+	writeJSON(w, http.StatusCreated, created)
+}
+
+func (s *Server) getWorkflow(w http.ResponseWriter, r *http.Request) {
+	workflow, err := s.store.GetWorkflow(r.Context(), r.PathValue("id"))
+	if errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "workflow not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load workflow")
+		return
+	}
+	writeJSON(w, http.StatusOK, workflow)
+}
+
+func (s *Server) listWorkflows(w http.ResponseWriter, r *http.Request) {
+	workflows, err := s.store.ListWorkflows(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not list workflows")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": workflows})
 }
 
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) {

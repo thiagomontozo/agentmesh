@@ -184,6 +184,32 @@ The stream closes after a terminal event. Every frame contains an SSE `id:` and 
 
 In distributed mode, NATS pub/sub makes live events visible on every API replica, while PostgreSQL provides ordered replay across reconnects and restarts. Replay is bounded by `AGENTMESH_EVENT_HISTORY_LIMIT` and `AGENTMESH_EVENT_RETENTION`. AgentMesh does not yet filter replay from an incoming `Last-Event-ID`, so reconnecting clients should deduplicate by `event_id`. PostgreSQL Run state remains authoritative.
 
+## Workflows
+
+Create a validated DAG definition:
+
+```bash
+curl -X POST http://localhost:8080/api/v1/workflows \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "input":"document to process",
+    "steps":[
+      {"id":"extract","agent_id":"agt_EXTRACT","input_from":["workflow"]},
+      {"id":"search","agent_id":"agt_SEARCH","depends_on":["extract"],"input_from":["extract"]},
+      {"id":"review","agent_id":"agt_REVIEW","depends_on":["extract","search"],"input_from":["extract","search"],"input_aggregation":"json-array"}
+    ]
+  }'
+```
+
+`input_from` accepts `workflow` or Step IDs. A Step output source must also be declared in `depends_on`. Multiple sources require `input_aggregation: "json-array"`; their declaration order is preserved for deterministic future aggregation. A Step may instead provide a literal `input`, but cannot mix literal and sourced input. Definitions reject missing Agents, duplicate/invalid Step IDs, unknown dependencies, self-dependencies, cycles, ambiguous input, and more than 100 Steps.
+
+```bash
+curl http://localhost:8080/api/v1/workflows
+curl http://localhost:8080/api/v1/workflows/wf_REPLACE_ME
+```
+
+This version persists definitions only. Returned Workflow and Step states remain `pending`; creating a definition does not create or enqueue Runs.
+
 ## Request validation
 
 - JSON bodies are limited to 1 MiB.
