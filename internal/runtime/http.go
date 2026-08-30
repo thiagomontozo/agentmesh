@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/thiagomontozo/agentmesh/internal/domain"
 	"github.com/thiagomontozo/agentmesh/internal/protocol"
 	protocolv1 "github.com/thiagomontozo/agentmesh/internal/protocol/v1"
 )
