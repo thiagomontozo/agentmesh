@@ -44,6 +44,7 @@ type Config struct {
 	HTTPBlockedCIDRs     []netip.Prefix
 	HTTPMaxRequestBytes  int64
 	HTTPMaxResponseBytes int64
+	AgentAuthConfig      string
 }
 
 func Load() (Config, error) {
@@ -257,6 +258,7 @@ func Load() (Config, error) {
 		HTTPBlockedCIDRs:     httpBlockedCIDRs,
 		HTTPMaxRequestBytes:  httpMaxRequestBytes,
 		HTTPMaxResponseBytes: httpMaxResponseBytes,
+		AgentAuthConfig:      stringEnv("AGENTMESH_AGENT_AUTH_CONFIG", ""),
 	}, nil
 }
 

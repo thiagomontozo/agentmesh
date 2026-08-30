@@ -66,6 +66,11 @@ while link-local/metadata addresses are denied. Dial-time address checks,
 allowlisted hosts, denied CIDRs, TLS requirements, and body limits are described
 in [HTTP Runtime security](http-runtime-security.md).
 
+`AGENTMESH_AGENT_AUTH_CONFIG` maps Agent IDs to Bearer/API-key configuration
+whose `secret_env` points to a separate environment variable. No secret is stored
+in AgentMesh persistence or returned through its API. See
+[Agent request authentication](agent-authentication.md).
+
 Example without Compose:
 
 ```bash

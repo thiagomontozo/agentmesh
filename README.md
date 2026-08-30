@@ -58,6 +58,7 @@ The Engine resolves the already-selected Agent's runtime through a concurrency-s
 - Agent registration and lookup
 - Remote HTTP Agent execution through Agent Protocol V1
 - Policy-controlled HTTP Runtime with dial-time SSRF checks and bounded, uncompressed payloads
+- Per-Agent Bearer/API-key request authentication through non-persisted secret references
 - Asynchronous run submission
 - Configurable concurrent worker pool
 - Explicit run state machine: `queued → running → succeeded/failed/canceled`
@@ -203,6 +204,7 @@ With the server running in one terminal:
 | `AGENTMESH_HTTP_BLOCKED_CIDRS` | — | Additional comma-separated denied CIDRs |
 | `AGENTMESH_HTTP_MAX_REQUEST_BYTES` | `1048576` | Maximum Agent Protocol request bytes |
 | `AGENTMESH_HTTP_MAX_RESPONSE_BYTES` | `1048576` | Maximum Agent response bytes |
+| `AGENTMESH_AGENT_AUTH_CONFIG` | — | Per-Agent outbound authentication using environment-secret references |
 
 ## Test
 
@@ -255,6 +257,7 @@ docs/                   roadmap and architecture notes
 - [Multi-replica integration test](docs/multi-replica-testing.md)
 - [API and Worker separation analysis](docs/api-worker-separation-analysis.md)
 - [HTTP Runtime security](docs/http-runtime-security.md)
+- [Agent request authentication](docs/agent-authentication.md)
 - [Configuration and operations](docs/configuration.md)
 - [API usage and examples](docs/api.md)
 - [Troubleshooting](docs/troubleshooting.md)

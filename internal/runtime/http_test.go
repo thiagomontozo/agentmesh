@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -366,6 +367,32 @@ func TestHTTPRuntimeLimitsRequestAndRejectsCompressedResponse(t *testing.T) {
 	}
 	_, err = executeRemote(context.Background(), runtime, server.URL)
 	requireHTTPError(t, err, agentruntime.HTTPErrorProtocol, 0)
+}
+
+func TestHTTPRuntimeAuthenticatesWithoutPuttingSecretInProtocolBody(t *testing.T) {
+	const secret = "top-secret-value"
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if got := request.Header.Get("Authorization"); got != "Bearer "+secret {
+			t.Errorf("unexpected authorization header %q", got)
+		}
+		body, _ := io.ReadAll(request.Body)
+		if strings.Contains(string(body), secret) {
+			t.Error("protocol body contains credential")
+		}
+		writeRuntimeResponse(t, response, protocolv1.RunResponse{ProtocolVersion: protocolv1.Version, RunID: "run_1", Status: protocolv1.StatusSucceeded})
+	}))
+	defer server.Close()
+	authenticator, err := agentruntime.NewEnvironmentAuthenticator(`{"agt_1":{"type":"bearer","secret_env":"TOKEN"}}`, func(string) (string, bool) { return secret, true })
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := agentruntime.NewSecureHTTPRuntime(server.Client(), agentruntime.HTTPOptions{Policy: agentruntime.DefaultHTTPPolicy(), Authenticator: authenticator})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := executeRemote(context.Background(), runtime, server.URL); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func executeRemote(ctx context.Context, runtime agentruntime.Runtime, endpoint string) (agentruntime.ExecutionResult, error) {

@@ -90,6 +90,11 @@ func main() {
 
 	executor := engine.DemoExecutor{Delay: cfg.ExecutionDelay}
 	runtimeResolver := agentruntime.NewRegistry(agentruntime.AdaptLegacy(executor))
+	authenticator, err := agentruntime.NewEnvironmentAuthenticator(cfg.AgentAuthConfig, os.LookupEnv)
+	if err != nil {
+		logger.Error("Agent authentication configuration failed", "error", err)
+		os.Exit(1)
+	}
 	httpRuntime, err := agentruntime.NewSecureHTTPRuntime(&http.Client{Timeout: cfg.AttemptTimeout}, agentruntime.HTTPOptions{
 		MaxRequestBytes: cfg.HTTPMaxRequestBytes, MaxResponseBytes: cfg.HTTPMaxResponseBytes,
 		Policy: agentruntime.HTTPPolicy{
@@ -97,6 +102,7 @@ func main() {
 			AllowLoopback: cfg.HTTPAllowLoopback, AllowLinkLocal: cfg.HTTPAllowLinkLocal,
 			AllowedHosts: cfg.HTTPAllowedHosts, BlockedCIDRs: cfg.HTTPBlockedCIDRs,
 		},
+		Authenticator: authenticator,
 	})
 	if err != nil {
 		logger.Error("HTTP runtime security configuration failed", "error", err)
