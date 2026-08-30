@@ -8,7 +8,9 @@ is not increased merely because related code exists.
 > Post-audit update: the critical platform increment added separate API/Worker
 > processes with crash/restart acceptance coverage, cross-replica cancellation,
 > renewable Workflow scheduler ownership, and opt-in external-effect
-> idempotency. The historical scores below describe the Item 34 checkpoint;
+> idempotency. The subsequent important increment added inbound RBAC, durable
+> audit records, request-time secret rotation, bounded metrics, and a real
+> mixed-version compatibility gate. The historical scores below describe the Item 34 checkpoint;
 > resolved critical gaps are tracked here, in the roadmap, and in current
 > architecture documentation.
 
@@ -98,16 +100,20 @@ Level 7 claim.
 
 ### Important
 
-1. Add inbound API authentication/authorization and replace the trusted
-   Agent-to-Agent caller header assertion with cryptographic identity.
+1. ~~Add inbound API authentication/authorization and replace the trusted
+   Agent-to-Agent caller header assertion with cryptographic identity.~~ Resolved
+   by opt-in Bearer identities, bounded roles, and Agent-bound credentials that
+   override the legacy caller header.
 2. ~~Integrate an external secret provider/rotation path behind
    `RequestAuthenticator`.~~ Resolved with request-time `SecretProvider`
    resolution and atomically replaceable mounted files.
 3. ~~Add bounded operational metrics for queue depth, active Runs, latency,
    attempts, failures, lease loss, recovery, and routing decisions.~~ Resolved
    through the dependency-free Prometheus endpoint and bounded event/HTTP labels.
-4. Validate rolling upgrades and storage/protocol backward compatibility with
-   mixed AgentMesh versions.
+4. ~~Validate rolling upgrades and storage/protocol backward compatibility with
+   mixed AgentMesh versions.~~ Resolved by a dedicated CI job that builds the
+   schema-016 baseline and current binary, then crosses API/Worker roles in both
+   directions on shared PostgreSQL, Redis, and NATS.
 
 ### Desirable
 
@@ -140,3 +146,8 @@ Level 7 claim.
 | Metrics and tracing | repository-wide code | — | **NOT PROVEN:** no metrics exporter or distributed tracing implementation exists. |
 | Immediate distributed cancellation | `internal/engine/engine.go`, `internal/integration/process_replicas_test.go` | `Engine.Cancel`, `watchCancellation`, `TestSeparateProcessesExecutePreserveAndRecoverRuns` | Proven for context-aware runtimes across API and worker processes through NATS events with persisted polling fallback. |
 | External effects reuse one retry identity | `internal/runtime/http.go`, `internal/integration/external_agents_test.go` | `HTTPRuntime.Execute`, `TestExternalEffectIsAppliedOnceAcrossRetry` | Attempt keys change while the stable effect key is reused and strictly acknowledged; the reference Agent commits one effect across a `500` retry. |
+| Inbound identity and authorization are enforced | `internal/apiauth/auth.go`, `internal/httpapi/server.go` | `Authenticator.Middleware`, `authorized`, `createAgentChildRun` | Constant-time Bearer identity carries bounded roles; Agent-bound identity replaces the spoofable caller header when enabled. |
+| Mutations are auditable | `internal/domain/audit.go`, `internal/store/postgres/postgres.go` | `AuditEvent`, `AppendAuditEvent`, `ListAuditEvents` | Bounded mutation records persist subject, role, correlation, operation, and result without request bodies or secrets. |
+| Secrets rotate without restart | `internal/runtime/auth.go` | `SecretProvider`, `NewEnvironmentFileSecretProvider`, `Authenticate` | Credential references resolve on every request; bounded absolute mounted files may be atomically replaced. |
+| Operational metrics are bounded | `internal/metrics/metrics.go` | `Registry`, `WrapBroker`, `WritePrometheus` | Finite HTTP/event/routing labels plus persisted Run-state gauges avoid Run/Agent/path cardinality. |
+| Mixed-version rolling upgrades are tested | `.github/workflows/ci.yml`, `scripts/rolling-upgrade-test.sh` | `compatibility` job | Schema-016 and current binaries cross API/Worker roles in both directions on shared PostgreSQL, Redis, and NATS. |

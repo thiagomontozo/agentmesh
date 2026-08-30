@@ -101,6 +101,7 @@ combined-only. A process-level integration test covers API restart, worker crash
 lease expiry, and replacement recovery. See [Process roles](process-roles.md).
 
 - PostgreSQL stores agents, run state, attempt counters, timestamps, idempotency keys, and bounded Run event history. Embedded, ordered SQL migrations run at startup.
+- CI builds the declared schema-016 compatibility baseline and the current binary, then crosses old/new API and Worker roles against the same dependencies. Migrations inside that window must remain additive. See [Rolling-upgrade compatibility](compatibility.md).
 - NATS JetStream durably stores run work. A named stream and durable pull consumer use explicit acknowledgements. Executor failures are retried by the engine; exhausted runs are published to `agentmesh.runs.dlq` before being marked failed.
 - NATS core pub/sub transports live Run events between replicas on one ordered subject. Each event is assigned a stable `event_id` and persisted before live publication. `NoEcho` prevents a publisher's own NATS subscription from duplicating the event, while ID-based local deduplication protects replay/live overlap.
 - Redis caches agent and run reads and provides token-protected execution leases. The Engine renews an active lease every third of its TTL, so a context-aware Run can safely exceed the original lease duration. Memory leases implement the same ownership and expiration contract. Cache failures fall back to PostgreSQL, while coordination failures stop delivery and make readiness fail.

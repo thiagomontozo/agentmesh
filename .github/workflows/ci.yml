@@ -54,3 +54,34 @@ jobs:
       - name: Stop distributed dependencies
         if: always()
         run: docker compose down -v
+
+  compatibility:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout full history
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: "1.23.x"
+          cache: true
+
+      - name: Build current and compatibility baseline
+        run: |
+          go build -o "$RUNNER_TEMP/agentmesh-current" ./cmd/agentmesh
+          baseline=$(tr -d '[:space:]' < compatibility/baseline.txt)
+          git worktree add --detach "$RUNNER_TEMP/agentmesh-baseline-src" "$baseline"
+          (cd "$RUNNER_TEMP/agentmesh-baseline-src" && go build -o "$RUNNER_TEMP/agentmesh-baseline" ./cmd/agentmesh)
+
+      - name: Start distributed dependencies
+        run: docker compose up -d --wait postgres nats redis
+
+      - name: Mixed-version rolling upgrade
+        run: scripts/rolling-upgrade-test.sh "$RUNNER_TEMP/agentmesh-baseline" "$RUNNER_TEMP/agentmesh-current"
+
+      - name: Stop distributed dependencies
+        if: always()
+        run: docker compose down -v
