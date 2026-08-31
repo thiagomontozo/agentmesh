@@ -1,0 +1,51 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: agentmesh
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/thiagomontozo/agentmesh.git
+    targetRevision: main
+    path: deploy/helm/agentmesh
+    helm:
+      releaseName: agentmesh
+      valuesObject:
+        image:
+          tag: "REPLACE_WITH_IMMUTABLE_TAG_OR_DIGEST"
+        dashboard:
+          image:
+            tag: "REPLACE_WITH_IMMUTABLE_TAG_OR_DIGEST"
+        secrets:
+          existingSecret: agentmesh-production-runtime
+        api:
+          autoscaling:
+            minReplicas: 3
+            maxReplicas: 12
+        worker:
+          autoscaling:
+            minReplicas: 3
+            maxReplicas: 24
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: agentmesh
+  syncPolicy:
+    automated:
+      enabled: true
+      prune: true
+      selfHeal: true
+      allowEmpty: false
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+      - PrunePropagationPolicy=foreground
+    retry:
+      limit: 5
+      refresh: true
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m

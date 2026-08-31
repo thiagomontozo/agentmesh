@@ -1,0 +1,44 @@
+{{- if .Values.api.pdb.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "agentmesh.fullname" . }}-api
+  labels:
+    {{- include "agentmesh.labels" . | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.api.pdb.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "agentmesh.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: api
+---
+{{- end }}
+{{- if .Values.worker.pdb.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "agentmesh.fullname" . }}-worker
+  labels:
+    {{- include "agentmesh.labels" . | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.worker.pdb.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "agentmesh.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: worker
+{{- end }}
+{{- if and .Values.dashboard.enabled .Values.dashboard.pdb.enabled }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "agentmesh.fullname" . }}-dashboard
+  labels:
+    {{- include "agentmesh.labels" . | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.dashboard.pdb.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "agentmesh.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: dashboard
+{{- end }}

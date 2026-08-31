@@ -1,0 +1,75 @@
+{{- if .Values.api.autoscaling.enabled }}
+{{- if and (not .Values.api.autoscaling.targetCPUUtilizationPercentage) (not .Values.api.autoscaling.targetMemoryUtilizationPercentage) }}
+{{- fail "api.autoscaling requires at least one CPU or memory target" }}
+{{- end }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "agentmesh.fullname" . }}-api
+  labels:
+    {{- include "agentmesh.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+spec:
+  scaleTargetRef: { apiVersion: apps/v1, kind: Deployment, name: {{ include "agentmesh.fullname" . }}-api }
+  minReplicas: {{ .Values.api.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.api.autoscaling.maxReplicas }}
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      policies: [{ type: Percent, value: 100, periodSeconds: 60 }, { type: Pods, value: 2, periodSeconds: 60 }]
+      selectPolicy: Max
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies: [{ type: Percent, value: 25, periodSeconds: 60 }]
+  metrics:
+    {{- with .Values.api.autoscaling.targetCPUUtilizationPercentage }}
+    - type: Resource
+      resource:
+        name: cpu
+        target: { type: Utilization, averageUtilization: {{ . }} }
+    {{- end }}
+    {{- with .Values.api.autoscaling.targetMemoryUtilizationPercentage }}
+    - type: Resource
+      resource:
+        name: memory
+        target: { type: Utilization, averageUtilization: {{ . }} }
+    {{- end }}
+---
+{{- end }}
+{{- if .Values.worker.autoscaling.enabled }}
+{{- if and (not .Values.worker.autoscaling.targetCPUUtilizationPercentage) (not .Values.worker.autoscaling.targetMemoryUtilizationPercentage) }}
+{{- fail "worker.autoscaling requires at least one CPU or memory target" }}
+{{- end }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "agentmesh.fullname" . }}-worker
+  labels:
+    {{- include "agentmesh.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  scaleTargetRef: { apiVersion: apps/v1, kind: Deployment, name: {{ include "agentmesh.fullname" . }}-worker }
+  minReplicas: {{ .Values.worker.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.worker.autoscaling.maxReplicas }}
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      policies: [{ type: Percent, value: 100, periodSeconds: 60 }, { type: Pods, value: 4, periodSeconds: 60 }]
+      selectPolicy: Max
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies: [{ type: Percent, value: 25, periodSeconds: 60 }]
+  metrics:
+    {{- with .Values.worker.autoscaling.targetCPUUtilizationPercentage }}
+    - type: Resource
+      resource:
+        name: cpu
+        target: { type: Utilization, averageUtilization: {{ . }} }
+    {{- end }}
+    {{- with .Values.worker.autoscaling.targetMemoryUtilizationPercentage }}
+    - type: Resource
+      resource:
+        name: memory
+        target: { type: Utilization, averageUtilization: {{ . }} }
+    {{- end }}
+{{- end }}

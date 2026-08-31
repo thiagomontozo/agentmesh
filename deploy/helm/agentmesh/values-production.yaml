@@ -1,0 +1,42 @@
+image:
+  repository: ghcr.io/thiagomontozo/agentmesh
+  tag: "REPLACE_WITH_IMMUTABLE_TAG_OR_DIGEST"
+
+secrets:
+  existingSecret: agentmesh-production-runtime
+
+api:
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 12
+
+worker:
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 24
+
+dashboard:
+  image:
+    repository: ghcr.io/thiagomontozo/agentmesh-dashboard
+    tag: "REPLACE_WITH_IMMUTABLE_TAG_OR_DIGEST"
+
+ingress:
+  api:
+    enabled: true
+    className: nginx
+    host: api.agentmesh.example.com
+    tls:
+      - secretName: agentmesh-api-tls
+        hosts: [api.agentmesh.example.com]
+  dashboard:
+    enabled: true
+    className: nginx
+    annotations:
+      nginx.ingress.kubernetes.io/proxy-buffering: "off"
+      nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    host: agentmesh.example.com
+    tls:
+      - secretName: agentmesh-dashboard-tls
+        hosts: [agentmesh.example.com]

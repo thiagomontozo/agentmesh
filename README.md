@@ -286,6 +286,7 @@ docs/                   roadmap and architecture notes
 - [MCP tool gateway](docs/mcp-tools.md)
 - [OpenTelemetry](docs/opentelemetry.md)
 - [Operations dashboard](docs/dashboard.md)
+- [Kubernetes, Helm, and GitOps](docs/kubernetes.md)
 - [Agent Protocol versioning](docs/protocol-versioning.md)
 - [Architectural reassessment](docs/architectural-reassessment.md)
 - [Configuration and operations](docs/configuration.md)
@@ -294,19 +295,14 @@ docs/                   roadmap and architecture notes
 - [Semantic / LLM Router analysis](docs/semantic-router-analysis.md)
 - [Roadmap](docs/roadmap.md)
 
-## Next milestones
+## Delivery status
 
-The next iterations add the real agent runtime and production operations:
+The versioned roadmap is complete through the v0.5 cloud-native milestone. It
+includes the extensible runtime, Agent Protocol, deterministic routing,
+persisted workflows, distributed execution, authentication and audit,
+operational telemetry, the Next.js dashboard, and Helm/GitOps deployment.
 
-1. Real LLM provider abstraction
-2. MCP tool gateway and tool policies
-3. Human approval gates
-4. OpenTelemetry and Prometheus
-5. Authentication, RBAC and audit log
-6. Next.js operations dashboard
-7. Kubernetes/Helm deployment
-
-See [`docs/roadmap.md`](docs/roadmap.md).
+See [`docs/roadmap.md`](docs/roadmap.md) for the evidence-oriented checklist.
 
 ## Design principles
 

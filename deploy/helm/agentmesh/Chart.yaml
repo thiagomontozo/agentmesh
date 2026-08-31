@@ -1,0 +1,15 @@
+apiVersion: v2
+name: agentmesh
+description: Distributed AgentMesh control plane, workers, and operations dashboard
+type: application
+version: 0.5.0
+appVersion: "0.5.0"
+kubeVersion: ">=1.27.0-0"
+home: https://github.com/thiagomontozo/agentmesh
+sources:
+  - https://github.com/thiagomontozo/agentmesh
+keywords:
+  - agents
+  - orchestration
+  - control-plane
+  - distributed

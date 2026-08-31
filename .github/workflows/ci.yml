@@ -9,6 +9,34 @@ permissions:
   contents: read
 
 jobs:
+  cloud-native:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v4.2.4
+
+      - name: Lint chart
+        run: helm lint deploy/helm/agentmesh --strict
+
+      - name: Render default distributed topology
+        run: helm template agentmesh deploy/helm/agentmesh --namespace agentmesh --kube-version 1.30.0 > "$RUNNER_TEMP/agentmesh.yaml"
+
+      - name: Render inline-secret and fixed-replica variants
+        run: |
+          helm template agentmesh deploy/helm/agentmesh --namespace agentmesh \
+            --set secrets.existingSecret= \
+            --set secrets.databaseURL=postgres://postgres/agentmesh \
+            --set secrets.natsURL=nats://nats:4222 \
+            --set secrets.redisURL=redis://redis:6379 \
+            --set api.autoscaling.enabled=false \
+            --set worker.autoscaling.enabled=false \
+            --set dashboard.enabled=false > "$RUNNER_TEMP/agentmesh-variant.yaml"
+
   dashboard:
     runs-on: ubuntu-latest
     defaults:

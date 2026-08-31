@@ -1,0 +1,135 @@
+nameOverride: ""
+fullnameOverride: ""
+
+image:
+  repository: ghcr.io/thiagomontozo/agentmesh
+  tag: ""
+  digest: ""
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+podAnnotations: {}
+podLabels: {}
+podSecurityContext:
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+
+config:
+  workers: 4
+  attemptTimeout: 30s
+  shutdownTimeout: 20s
+  maxAttempts: 3
+  retryInitialBackoff: 250ms
+  retryMaxBackoff: 5s
+  natsAckWait: 2m
+  cacheTTL: 30s
+  leaseTTL: 5m
+  eventRetention: 168h
+  eventHistoryLimit: 1000
+  workflowConcurrency: 4
+  workflowLeaseTTL: 30s
+  approvalTTL: 15m
+  approvalRetention: 720h
+  mcpServers: ""
+  extraEnv: []
+
+# Production values should reference a Secret provisioned by the cluster's
+# secret manager. The chart never renders secret values when existingSecret is set.
+secrets:
+  existingSecret: agentmesh-runtime
+  databaseURLKey: database-url
+  natsURLKey: nats-url
+  redisURLKey: redis-url
+  apiAuthConfigKey: api-auth-config
+  agentAuthConfigKey: agent-auth-config
+  # Inline values are only used when existingSecret is empty.
+  databaseURL: ""
+  natsURL: ""
+  redisURL: ""
+  apiAuthConfig: ""
+  agentAuthConfig: ""
+
+api:
+  replicas: 2
+  service:
+    type: ClusterIP
+    port: 8080
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits: { cpu: 1000m, memory: 512Mi }
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 8
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+  pdb:
+    enabled: true
+    minAvailable: 1
+  topologySpreadConstraints: true
+
+worker:
+  replicas: 2
+  metricsPort: 9090
+  resources:
+    requests: { cpu: 200m, memory: 128Mi }
+    limits: { cpu: 2000m, memory: 1Gi }
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 16
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+  pdb:
+    enabled: true
+    minAvailable: 1
+  topologySpreadConstraints: true
+
+dashboard:
+  enabled: true
+  replicas: 2
+  image:
+    repository: ghcr.io/thiagomontozo/agentmesh-dashboard
+    tag: ""
+    digest: ""
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 3000
+  apiTokenSecretKey: dashboard-api-token
+  resources:
+    requests: { cpu: 50m, memory: 96Mi }
+    limits: { cpu: 500m, memory: 384Mi }
+  pdb:
+    enabled: true
+    minAvailable: 1
+
+ingress:
+  api:
+    enabled: false
+    className: ""
+    annotations: {}
+    host: api.agentmesh.example.com
+    tls: []
+  dashboard:
+    enabled: false
+    className: ""
+    annotations: {}
+    host: agentmesh.example.com
+    tls: []
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+terminationGracePeriodSeconds: 35
