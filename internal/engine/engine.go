@@ -16,6 +16,7 @@ import (
 	"github.com/thiagomontozo/agentmesh/internal/queue"
 	agentruntime "github.com/thiagomontozo/agentmesh/internal/runtime"
 	"github.com/thiagomontozo/agentmesh/internal/store"
+	"github.com/thiagomontozo/agentmesh/internal/telemetry"
 )
 
 type Executor interface {
@@ -265,6 +266,8 @@ func (e *Engine) execute(ctx context.Context, runID string) error {
 		return fmt.Errorf("load run %s: %w", runID, err)
 	}
 	ctx = observability.WithRequestID(ctx, run.RequestID)
+	ctx, runSpan := telemetry.StartRun(ctx, run.ID, run.AgentID, run.RequestID, e.instanceID)
+	defer runSpan.End()
 	if run.Status == domain.RunSucceeded {
 		return nil
 	}
@@ -355,11 +358,19 @@ func (e *Engine) execute(ctx context.Context, runID string) error {
 		slog.InfoContext(ctx, "run attempt started", runLogAttrs(ctx, run)...)
 
 		attemptCtx, cancelAttempt := context.WithTimeout(runCtx, e.retry.AttemptTimeout)
+		attemptCtx, attemptSpan, attemptStarted := telemetry.StartAttempt(attemptCtx, run.ID, agent.ID, run.Attempt)
 		result, executeErr := executeRuntimeSafely(attemptCtx, implementation, agentruntime.ExecutionRequest{
 			RunID: run.ID, Agent: agent, Attempt: run.Attempt, Input: run.Input,
 		})
 		attemptContextErr := attemptCtx.Err()
 		cancelAttempt()
+		if errors.Is(attemptContextErr, context.DeadlineExceeded) && !errors.Is(executeErr, ErrRuntimePanic) {
+			executeErr = fmt.Errorf("%w: attempt %d exceeded %s", ErrAttemptTimeout, run.Attempt, e.retry.AttemptTimeout)
+			e.publishRun(run, "run.attempt_timed_out", executeErr.Error(), run.Attempt)
+			attributes := append(runLogAttrs(ctx, run), "timeout", e.retry.AttemptTimeout)
+			slog.WarnContext(ctx, "run attempt timed out", attributes...)
+		}
+		telemetry.FinishAttempt(attemptSpan, executeErr, attemptStarted)
 		if renewalErr := e.leaseRenewalError(ctx, run.ID, run.Attempt, keeper); renewalErr != nil {
 			return renewalErr
 		}
@@ -368,12 +379,6 @@ func (e *Engine) execute(ctx context.Context, runID string) error {
 		}
 		if runCtx.Err() != nil {
 			return nil
-		}
-		if errors.Is(attemptContextErr, context.DeadlineExceeded) && !errors.Is(executeErr, ErrRuntimePanic) {
-			executeErr = fmt.Errorf("%w: attempt %d exceeded %s", ErrAttemptTimeout, run.Attempt, e.retry.AttemptTimeout)
-			e.publishRun(run, "run.attempt_timed_out", executeErr.Error(), run.Attempt)
-			attributes := append(runLogAttrs(ctx, run), "timeout", e.retry.AttemptTimeout)
-			slog.WarnContext(ctx, "run attempt timed out", attributes...)
 		}
 		if executeErr == nil {
 			if err := run.Succeed(result.Output, time.Now()); err != nil {
@@ -387,6 +392,7 @@ func (e *Engine) execute(ctx context.Context, runID string) error {
 			}
 			e.publishRun(run, "run.succeeded", "run completed successfully", run.Attempt)
 			slog.InfoContext(ctx, "run succeeded", runLogAttrs(ctx, run)...)
+			telemetry.RecordRunDuration(ctx, string(run.Status), run.DurationMS)
 			return nil
 		}
 		if run.Attempt >= run.MaxAttempts {
@@ -497,6 +503,7 @@ func (e *Engine) failRun(ctx context.Context, run domain.Run, executionFence int
 	e.publishRun(run, "run.failed", err.Error(), run.Attempt)
 	attributes := append(runLogAttrs(ctx, run), "error", err)
 	slog.ErrorContext(ctx, "run failed", attributes...)
+	telemetry.RecordRunDuration(ctx, string(run.Status), run.DurationMS)
 	if deadLetterErr := e.queue.DeadLetter(ctx, run.ID, err); deadLetterErr != nil {
 		return fmt.Errorf("dead-letter run: %w", deadLetterErr)
 	}

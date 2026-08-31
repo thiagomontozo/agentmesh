@@ -163,7 +163,7 @@ The application emits JSON through `log/slog`. HTTP middleware accepts a safe `X
 
 Every process has an `instance_id`: `AGENTMESH_INSTANCE_ID` when configured, otherwise hostname plus a random suffix. Memory workers use stable IDs such as `memory-1`; JetStream deliveries acquire bounded worker slots such as `nats-1`. Engine lifecycle, retry, timeout, panic, lease, success, and failure logs add the identifiers available at their boundary: `request_id`, `instance_id`, `worker_id`, `run_id`, `agent_id`, and `attempt`.
 
-Terminal Runs expose persisted `duration_ms`, measured from execution start or, when execution never started, creation time. Recovery clears the partial duration before requeue. Distributed tracing and OpenTelemetry remain intentionally deferred.
+Terminal Runs expose persisted `duration_ms`, measured from execution start or, when execution never started, creation time. Recovery clears the partial duration before requeue. Opt-in OpenTelemetry instruments HTTP and execution boundaries; asynchronous cross-replica correlation currently uses persisted request/Run/Agent attributes rather than persisted W3C parent context.
 
 The API additionally exposes bounded Prometheus text metrics. A Broker wrapper
 counts only known Run event types, HTTP labels exclude raw paths, Router labels
