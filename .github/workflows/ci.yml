@@ -37,6 +37,91 @@ jobs:
             --set worker.autoscaling.enabled=false \
             --set dashboard.enabled=false > "$RUNNER_TEMP/agentmesh-variant.yaml"
 
+      - name: Validate production Compose
+        run: docker compose --env-file .env.production.example -f compose.production.yml config -q
+
+      - name: Validate production preparation script
+        run: sh -n scripts/prepare-production-compose.sh
+
+  production-compose:
+    runs-on: ubuntu-latest
+    env:
+      AGENTMESH_IMAGE: agentmesh-production:test
+      DASHBOARD_IMAGE: agentmesh-dashboard-production:test
+      POSTGRES_IMAGE: postgres:17-alpine
+      NATS_IMAGE: nats:2.12-alpine
+      REDIS_IMAGE: redis:8.2-alpine
+      GATEWAY_IMAGE: nginx:alpine
+      IMAGE_PULL_POLICY: missing
+      HTTP_BIND_ADDRESS: 127.0.0.1
+      HTTPS_BIND_ADDRESS: 127.0.0.1
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Prepare ephemeral production secrets
+        run: |
+          openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
+            -subj /CN=localhost \
+            -addext subjectAltName=DNS:localhost,IP:127.0.0.1 \
+            -keyout "$RUNNER_TEMP/tls.key" -out "$RUNNER_TEMP/tls.crt" >/dev/null 2>&1
+          sh scripts/prepare-production-compose.sh \
+            "$RUNNER_TEMP/tls.crt" "$RUNNER_TEMP/tls.key" "$RUNNER_TEMP/agentmesh-secrets"
+          echo "SECRETS_DIR=$RUNNER_TEMP/agentmesh-secrets" >> "$GITHUB_ENV"
+
+      - name: Build application images
+        run: |
+          docker build -t "$AGENTMESH_IMAGE" .
+          docker build -t "$DASHBOARD_IMAGE" dashboard
+
+      - name: Start production topology
+        run: docker compose --env-file .env.production.example -f compose.production.yml up -d --wait
+
+      - name: Execute authenticated production smoke test
+        run: |
+          token=$(cat "$SECRETS_DIR/automation_api_token")
+          dashboard_password=$(cat "$SECRETS_DIR/dashboard_basic_auth_password")
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' --insecure https://127.0.0.1/)" = 401
+          curl --fail --silent --show-error --insecure \
+            --user "agentmesh:$dashboard_password" https://127.0.0.1/ >/dev/null
+          agent_id=$(curl --fail --silent --show-error --insecure \
+            -X POST https://127.0.0.1/api/v1/agents \
+            -H "Authorization: Bearer $token" \
+            -H 'Content-Type: application/json' \
+            -d '{"name":"production-compose-ci"}' | jq -r .id)
+          test -n "$agent_id" && test "$agent_id" != null
+          run_id=$(curl --fail --silent --show-error --insecure \
+            -X POST https://127.0.0.1/api/v1/runs \
+            -H "Authorization: Bearer $token" \
+            -H 'Content-Type: application/json' \
+            -H 'Idempotency-Key: production-compose-ci' \
+            -d "{\"agent_id\":\"$agent_id\",\"input\":\"production smoke\"}" | jq -r .id)
+          for attempt in $(seq 1 60); do
+            response=$(curl --fail --silent --show-error --insecure \
+              -H "Authorization: Bearer $token" \
+              "https://127.0.0.1/api/v1/runs/$run_id")
+            status=$(jq -r .status <<<"$response")
+            if [ "$status" = succeeded ]; then
+              jq -e '.output == "Agent \"production-compose-ci\" processed: production smoke"' <<<"$response"
+              exit 0
+            fi
+            if [ "$status" = failed ] || [ "$status" = canceled ]; then
+              jq . <<<"$response"
+              exit 1
+            fi
+            sleep 1
+          done
+          echo "production Run did not finish" >&2
+          exit 1
+
+      - name: Show service logs on failure
+        if: failure()
+        run: docker compose --env-file .env.production.example -f compose.production.yml logs --no-color
+
+      - name: Stop production topology
+        if: always()
+        run: docker compose --env-file .env.production.example -f compose.production.yml down -v
+
   dashboard:
     runs-on: ubuntu-latest
     defaults:

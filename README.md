@@ -249,7 +249,13 @@ for dependency outage/recovery and concurrent process-load coverage.
 
 ## Docker
 
-`docker compose up --build` starts the complete distributed stack. For the lightweight local mode, use `go run ./cmd/agentmesh`.
+`docker compose up --build` starts the complete distributed development stack. For the lightweight local mode, use `go run ./cmd/agentmesh`.
+
+For a hardened single-host installation with TLS ingress, mandatory Bearer
+authentication, split API/Worker replicas, Docker secrets, resource limits, and
+unpublished dependency ports, use `compose.production.yml` and the
+[on-premises production runbook](docs/compose-production.md). The development
+Compose file intentionally retains simple local defaults.
 
 ## Project structure
 
@@ -287,6 +293,7 @@ docs/                   roadmap and architecture notes
 - [OpenTelemetry](docs/opentelemetry.md)
 - [Operations dashboard](docs/dashboard.md)
 - [Kubernetes, Helm, and GitOps](docs/kubernetes.md)
+- [Production Docker Compose on premises](docs/compose-production.md)
 - [Agent Protocol versioning](docs/protocol-versioning.md)
 - [Architectural reassessment](docs/architectural-reassessment.md)
 - [Configuration and operations](docs/configuration.md)

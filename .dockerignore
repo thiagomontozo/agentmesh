@@ -1,0 +1,16 @@
+.git
+.github
+.env
+.env.*
+secrets
+dashboard
+deploy
+docs
+scripts
+compose*.yml
+*.md
+bin
+coverage.out
+*.exe
+*.test
+*.out
