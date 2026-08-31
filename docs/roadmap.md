@@ -39,7 +39,7 @@
 - [x] Human approval gates
 
 ## v0.4 — Observability and security
-- [ ] OpenTelemetry traces and metrics
+- [x] OpenTelemetry traces and metrics
 - [x] Bounded Prometheus operational metrics
 - [x] Structured JSON logs, request correlation, instance/worker IDs, and Run duration
 - [x] Bounded background health checks for remote HTTP Agents

@@ -19,6 +19,7 @@ import (
 	"github.com/thiagomontozo/agentmesh/internal/domain"
 	"github.com/thiagomontozo/agentmesh/internal/protocol"
 	protocolv1 "github.com/thiagomontozo/agentmesh/internal/protocol/v1"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 const (
@@ -171,7 +172,7 @@ func policyHTTPClient(client *http.Client, policy HTTPPolicy, requirePolicyTrans
 		ok = true
 	}
 	if ok {
-		clientCopy.Transport = secureTransport(transport, policy)
+		clientCopy.Transport = otelhttp.NewTransport(secureTransport(transport, policy))
 	} else if requirePolicyTransport {
 		return nil, fmt.Errorf("secure HTTP runtime requires *http.Transport")
 	}

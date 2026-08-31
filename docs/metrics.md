@@ -35,5 +35,7 @@ example `:9090`) to enable a metrics-only listener. It uses the same inbound
 Bearer/RBAC middleware when `AGENTMESH_API_AUTH_CONFIG` is configured; otherwise
 it is unauthenticated and should remain on a protected operations network.
 
-This increment does not add distributed tracing, OpenTelemetry, alert rules, or
-dashboard definitions.
+OTLP/HTTP can additionally export the bounded `agentmesh.run.attempts` counter
+and `agentmesh.run.duration` histogram. It also provides distributed tracing;
+see [OpenTelemetry](opentelemetry.md). Alert rules and dashboard definitions
+remain separate operational concerns.

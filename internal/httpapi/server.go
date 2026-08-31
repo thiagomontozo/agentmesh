@@ -26,6 +26,7 @@ import (
 	"github.com/thiagomontozo/agentmesh/internal/observability"
 	agentrouter "github.com/thiagomontozo/agentmesh/internal/router"
 	"github.com/thiagomontozo/agentmesh/internal/store"
+	"github.com/thiagomontozo/agentmesh/internal/telemetry"
 )
 
 type Server struct {
@@ -132,7 +133,7 @@ func (s *Server) Handler() http.Handler {
 	if s.metrics != nil {
 		handler = s.metrics.HTTPMiddleware(handler)
 	}
-	return requestContextMiddleware(s.instanceID, loggingMiddleware(handler))
+	return telemetry.HTTPHandler(requestContextMiddleware(s.instanceID, loggingMiddleware(handler)))
 }
 
 func (s *Server) routes() {

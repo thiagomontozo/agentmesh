@@ -28,6 +28,7 @@ import (
 	agentruntime "github.com/thiagomontozo/agentmesh/internal/runtime"
 	"github.com/thiagomontozo/agentmesh/internal/store"
 	postgresstore "github.com/thiagomontozo/agentmesh/internal/store/postgres"
+	"github.com/thiagomontozo/agentmesh/internal/telemetry"
 	workflowengine "github.com/thiagomontozo/agentmesh/internal/workflow"
 )
 
@@ -43,6 +44,18 @@ func main() {
 
 	rootCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	shutdownTelemetry, err := telemetry.Setup(rootCtx, "agentmesh", instanceID)
+	if err != nil {
+		logger.Error("OpenTelemetry initialization failed", "error", err)
+		os.Exit(1)
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := shutdownTelemetry(shutdownCtx); err != nil {
+			logger.Error("OpenTelemetry shutdown failed", "error", err)
+		}
+	}()
 
 	var repository store.Repository
 	var runQueue queue.Queue

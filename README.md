@@ -284,6 +284,7 @@ docs/                   roadmap and architecture notes
 - [Agent request authentication](docs/agent-authentication.md)
 - [LLM providers](docs/llm-providers.md)
 - [MCP tool gateway](docs/mcp-tools.md)
+- [OpenTelemetry](docs/opentelemetry.md)
 - [Agent Protocol versioning](docs/protocol-versioning.md)
 - [Architectural reassessment](docs/architectural-reassessment.md)
 - [Configuration and operations](docs/configuration.md)
