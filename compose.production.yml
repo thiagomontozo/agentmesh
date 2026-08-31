@@ -291,6 +291,7 @@ services:
     image: "${GATEWAY_IMAGE:?set GATEWAY_IMAGE to a pinned image in the on-premises registry}"
     pull_policy: "${IMAGE_PULL_POLICY:-always}"
     restart: unless-stopped
+    user: "101:101"
     read_only: true
     entrypoint: ["nginx", "-g", "daemon off;"]
     ports:
@@ -309,7 +310,6 @@ services:
     tmpfs:
       - /tmp:size=64m,mode=1777
     cap_drop: [ALL]
-    cap_add: [SETGID, SETUID]
     security_opt:
       - no-new-privileges:true
     healthcheck:

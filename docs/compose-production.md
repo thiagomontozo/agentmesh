@@ -10,7 +10,8 @@ the Helm chart when failure of the Docker host must not interrupt the service.
 
 ## Topology and security defaults
 
-- Nginx is the only service with host ports and terminates TLS on `80/443`.
+- Nginx is the only service with host ports, terminates TLS on `80/443`, and
+  runs as the unprivileged UID/GID `101` on internal ports `8080/8443`.
 - PostgreSQL, Redis, and NATS have no published ports and share an internal
   backend network with AgentMesh.
 - API and Worker roles run independently and default to two replicas each.
