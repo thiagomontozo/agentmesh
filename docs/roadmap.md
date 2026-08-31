@@ -72,8 +72,8 @@
 - [x] Dependency outage/recovery and sustained multi-worker load CI
 
 ## v0.5 — UI and cloud native
-- [ ] Next.js dashboard
-- [ ] WebSocket/SSE live run view
+- [x] Next.js dashboard
+- [x] WebSocket/SSE live run view
 - [ ] Kubernetes manifests / Helm chart
 - [ ] Horizontal scaling
 - [ ] GitOps example
