@@ -24,13 +24,18 @@ Agents, runs, queue messages, and events disappear when the process exits. Use t
 
 ### Distributed
 
-Distributed mode requires PostgreSQL, NATS with JetStream enabled, and Redis. The supplied Compose file configures all three:
+Distributed mode requires PostgreSQL, NATS with JetStream enabled, and Redis. The supplied development Compose file configures all three:
 
 ```bash
 docker compose up --build
 ```
 
 The API is available at `http://localhost:8080`. PostgreSQL migrations run automatically during application startup.
+
+For a single on-premises production host, use `compose.production.yml` rather
+than modifying these development defaults. It adds TLS ingress, mandatory API
+authentication, Docker secrets, split API/Worker replicas, network isolation,
+resource limits, and log rotation. See [Production Docker Compose](compose-production.md).
 
 Rolling releases must preserve the declared compatibility baseline and use
 forward-only additive migrations. The mixed-binary CI procedure and rollback
@@ -151,7 +156,8 @@ Runs interrupted by process shutdown remain recoverable. On startup, queued work
 
 ## Production notes
 
-- Replace the development passwords from `compose.yml`.
+- Never deploy the development `compose.yml` as production; use the separate
+  production Compose and its secret preparation procedure.
 - Set a unique, stable `AGENTMESH_INSTANCE_ID` for every replica so logs remain attributable across restarts.
 - Enable TLS and authentication for PostgreSQL, NATS, and Redis.
 - Do not expose dependency ports publicly.

@@ -1,0 +1,368 @@
+x-agentmesh-environment: &agentmesh-environment
+  AGENTMESH_MODE: distributed
+  AGENTMESH_ADDR: ":8080"
+  AGENTMESH_WORKERS: "${AGENTMESH_WORKERS:-4}"
+  AGENTMESH_ATTEMPT_TIMEOUT: "${AGENTMESH_ATTEMPT_TIMEOUT:-2m}"
+  AGENTMESH_SHUTDOWN_TIMEOUT: "${AGENTMESH_SHUTDOWN_TIMEOUT:-30s}"
+  AGENTMESH_MAX_ATTEMPTS: "${AGENTMESH_MAX_ATTEMPTS:-3}"
+  AGENTMESH_RETRY_INITIAL_BACKOFF: "${AGENTMESH_RETRY_INITIAL_BACKOFF:-1s}"
+  AGENTMESH_RETRY_MAX_BACKOFF: "${AGENTMESH_RETRY_MAX_BACKOFF:-15s}"
+  AGENTMESH_NATS_ACK_WAIT: "${AGENTMESH_NATS_ACK_WAIT:-3m}"
+  AGENTMESH_CACHE_TTL: "${AGENTMESH_CACHE_TTL:-30s}"
+  AGENTMESH_LEASE_TTL: "${AGENTMESH_LEASE_TTL:-5m}"
+  AGENTMESH_EVENT_RETENTION: "${AGENTMESH_EVENT_RETENTION:-168h}"
+  AGENTMESH_EVENT_HISTORY_LIMIT: "${AGENTMESH_EVENT_HISTORY_LIMIT:-1000}"
+  AGENTMESH_WORKFLOW_CONCURRENCY: "${AGENTMESH_WORKFLOW_CONCURRENCY:-4}"
+  AGENTMESH_WORKFLOW_LEASE_TTL: "${AGENTMESH_WORKFLOW_LEASE_TTL:-30s}"
+  AGENTMESH_AGENT_CALL_MAX_DEPTH: "${AGENTMESH_AGENT_CALL_MAX_DEPTH:-8}"
+  AGENTMESH_AGENT_CALL_MAX_CHILDREN: "${AGENTMESH_AGENT_CALL_MAX_CHILDREN:-16}"
+  AGENTMESH_AGENT_HEALTH_INTERVAL: "${AGENTMESH_AGENT_HEALTH_INTERVAL:-30s}"
+  AGENTMESH_AGENT_HEALTH_TIMEOUT: "${AGENTMESH_AGENT_HEALTH_TIMEOUT:-2s}"
+  AGENTMESH_AGENT_HEALTH_WORKERS: "${AGENTMESH_AGENT_HEALTH_WORKERS:-2}"
+  AGENTMESH_HTTP_REQUIRE_HTTPS: "${AGENTMESH_HTTP_REQUIRE_HTTPS:-true}"
+  AGENTMESH_HTTP_ALLOW_PRIVATE_NETWORKS: "${AGENTMESH_HTTP_ALLOW_PRIVATE_NETWORKS:-true}"
+  AGENTMESH_HTTP_ALLOW_LOOPBACK: "false"
+  AGENTMESH_HTTP_ALLOW_LINK_LOCAL: "false"
+  AGENTMESH_HTTP_ALLOWED_HOSTS: "${AGENTMESH_HTTP_ALLOWED_HOSTS:-}"
+  AGENTMESH_HTTP_BLOCKED_CIDRS: "${AGENTMESH_HTTP_BLOCKED_CIDRS:-}"
+  AGENTMESH_HTTP_MAX_REQUEST_BYTES: "${AGENTMESH_HTTP_MAX_REQUEST_BYTES:-1048576}"
+  AGENTMESH_HTTP_MAX_RESPONSE_BYTES: "${AGENTMESH_HTTP_MAX_RESPONSE_BYTES:-1048576}"
+  AGENTMESH_AUDIT_RETENTION: "${AGENTMESH_AUDIT_RETENTION:-2160h}"
+  AGENTMESH_AUDIT_MAX_EVENTS: "${AGENTMESH_AUDIT_MAX_EVENTS:-100000}"
+  AGENTMESH_MCP_SERVERS: "${AGENTMESH_MCP_SERVERS:-}"
+  AGENTMESH_MCP_DEFAULT_TIMEOUT: "${AGENTMESH_MCP_DEFAULT_TIMEOUT:-10s}"
+  AGENTMESH_APPROVAL_TTL: "${AGENTMESH_APPROVAL_TTL:-15m}"
+  AGENTMESH_APPROVAL_RETENTION: "${AGENTMESH_APPROVAL_RETENTION:-720h}"
+  AGENTMESH_AGENT_AUTH_CONFIG: "${AGENTMESH_AGENT_AUTH_CONFIG:-}"
+  AGENTMESH_API_AUTH_CONFIG: '{"dashboard":{"secret_env":"DASHBOARD_API_TOKEN","roles":["admin"]},"automation":{"secret_env":"AUTOMATION_API_TOKEN","roles":["operator"]}}'
+  OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-}"
+  OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+
+x-agentmesh-service: &agentmesh-service
+  image: "${AGENTMESH_IMAGE:?set AGENTMESH_IMAGE to an immutable image in the on-premises registry}"
+  pull_policy: "${IMAGE_PULL_POLICY:-always}"
+  restart: unless-stopped
+  init: true
+  read_only: true
+  tmpfs:
+    - /tmp:size=32m,mode=1777
+  cap_drop: [ALL]
+  security_opt:
+    - no-new-privileges:true
+  environment: *agentmesh-environment
+  entrypoint: ["/bin/sh", "-ec"]
+  command:
+    - |
+      read_secret() {
+        value="$$(cat "/run/secrets/$$1")"
+        case "$$value" in
+          ""|*[!A-Za-z0-9_-]*) echo "secret $$1 must be non-empty URL-safe text" >&2; exit 1 ;;
+        esac
+        printf '%s' "$$value"
+      }
+      postgres_password="$$(read_secret postgres_password)"
+      nats_token="$$(read_secret nats_token)"
+      redis_password="$$(read_secret redis_password)"
+      export DASHBOARD_API_TOKEN="$$(read_secret dashboard_api_token)"
+      export AUTOMATION_API_TOKEN="$$(read_secret automation_api_token)"
+      export OUTBOUND_AGENT_TOKEN="$$(read_secret outbound_agent_token)"
+      export AGENTMESH_DATABASE_URL="postgres://agentmesh:$${postgres_password}@postgres:5432/agentmesh?sslmode=disable"
+      export AGENTMESH_NATS_URL="nats://$${nats_token}@nats:4222"
+      export AGENTMESH_REDIS_URL="redis://:$${redis_password}@redis:6379/0"
+      exec /usr/local/bin/agentmesh
+  secrets:
+    - postgres_password
+    - nats_token
+    - redis_password
+    - dashboard_api_token
+    - automation_api_token
+    - outbound_agent_token
+  depends_on:
+    postgres:
+      condition: service_healthy
+      restart: true
+    nats:
+      condition: service_healthy
+      restart: true
+    redis:
+      condition: service_healthy
+      restart: true
+  networks:
+    - backend
+    - egress
+  logging: &default-logging
+    driver: json-file
+    options:
+      max-size: "${LOG_MAX_SIZE:-20m}"
+      max-file: "${LOG_MAX_FILES:-5}"
+
+services:
+  postgres:
+    image: "${POSTGRES_IMAGE:?set POSTGRES_IMAGE to a pinned image in the on-premises registry}"
+    pull_policy: "${IMAGE_PULL_POLICY:-always}"
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: agentmesh
+      POSTGRES_USER: agentmesh
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256"
+    secrets:
+      - postgres_password
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agentmesh -d agentmesh"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    stop_grace_period: 60s
+    shm_size: "${POSTGRES_SHM_SIZE:-256m}"
+    mem_limit: "${POSTGRES_MEMORY:-2g}"
+    cpus: "${POSTGRES_CPUS:-2.0}"
+    pids_limit: 512
+    security_opt:
+      - no-new-privileges:true
+    networks: [backend]
+    logging: *default-logging
+
+  nats:
+    image: "${NATS_IMAGE:?set NATS_IMAGE to a pinned image in the on-premises registry}"
+    pull_policy: "${IMAGE_PULL_POLICY:-always}"
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        token="$$(cat /run/secrets/nats_token)"
+        case "$$token" in
+          ""|*[!A-Za-z0-9_-]*) echo "nats_token must be non-empty URL-safe text" >&2; exit 1 ;;
+        esac
+        umask 077
+        printf 'authorization { token: "%s" }\njetstream { store_dir: "/data" }\nhttp_port: 8222\n' "$$token" > /run/nats/nats.conf
+        exec nats-server --config /run/nats/nats.conf
+    secrets:
+      - nats_token
+    volumes:
+      - nats-data:/data
+    tmpfs:
+      - /run/nats:size=1m,mode=0700
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8222/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+    stop_grace_period: 30s
+    mem_limit: "${NATS_MEMORY:-1g}"
+    cpus: "${NATS_CPUS:-1.0}"
+    pids_limit: 256
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    networks: [backend]
+    logging: *default-logging
+
+  redis:
+    image: "${REDIS_IMAGE:?set REDIS_IMAGE to a pinned image in the on-premises registry}"
+    pull_policy: "${IMAGE_PULL_POLICY:-always}"
+    restart: unless-stopped
+    user: "0:0"
+    working_dir: /data
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        password="$$(cat /run/secrets/redis_password)"
+        case "$$password" in
+          ""|*[!A-Za-z0-9_-]*) echo "redis_password must be non-empty URL-safe text" >&2; exit 1 ;;
+        esac
+        umask 077
+        {
+          printf 'bind 0.0.0.0\nprotected-mode yes\nport 6379\nappendonly yes\nappendfsync everysec\n'
+          printf 'requirepass %s\n' "$$password"
+        } > /run/redis/redis.conf
+        chown redis:redis /run/redis/redis.conf
+        exec /usr/local/bin/docker-entrypoint.sh redis-server /run/redis/redis.conf
+    secrets:
+      - redis_password
+    volumes:
+      - redis-data:/data
+    tmpfs:
+      - /run/redis:size=1m,mode=0700
+    healthcheck:
+      test: ["CMD-SHELL", "REDISCLI_AUTH=$$(cat /run/secrets/redis_password) redis-cli ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+    stop_grace_period: 30s
+    mem_limit: "${REDIS_MEMORY:-1g}"
+    cpus: "${REDIS_CPUS:-1.0}"
+    pids_limit: 256
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETGID, SETUID]
+    security_opt:
+      - no-new-privileges:true
+    networks: [backend]
+    logging: *default-logging
+
+  api:
+    <<: *agentmesh-service
+    environment:
+      <<: *agentmesh-environment
+      AGENTMESH_ROLE: api
+    expose: ["8080"]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8080/readyz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    stop_grace_period: 45s
+    mem_limit: "${API_MEMORY:-512m}"
+    cpus: "${API_CPUS:-1.0}"
+    pids_limit: 256
+    deploy:
+      replicas: ${API_REPLICAS:-2}
+    networks:
+      - edge
+      - backend
+      - egress
+
+  worker:
+    <<: *agentmesh-service
+    environment:
+      <<: *agentmesh-environment
+      AGENTMESH_ROLE: worker
+      AGENTMESH_METRICS_ADDR: ":9090"
+    expose: ["9090"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - --header=\"Authorization: Bearer $$(cat /run/secrets/dashboard_api_token)\" http://127.0.0.1:9090/metrics >/dev/null"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    stop_grace_period: 45s
+    mem_limit: "${WORKER_MEMORY:-1g}"
+    cpus: "${WORKER_CPUS:-2.0}"
+    pids_limit: 256
+    deploy:
+      replicas: ${WORKER_REPLICAS:-2}
+
+  dashboard:
+    image: "${DASHBOARD_IMAGE:?set DASHBOARD_IMAGE to an immutable image in the on-premises registry}"
+    pull_policy: "${IMAGE_PULL_POLICY:-always}"
+    restart: unless-stopped
+    init: true
+    read_only: true
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        export AGENTMESH_API_TOKEN="$$(cat /run/secrets/dashboard_api_token)"
+        exec node server.js
+    environment:
+      AGENTMESH_API_URL: http://api:8080
+    secrets:
+      - dashboard_api_token
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+      - /app/.next/cache:size=64m,mode=0750
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    expose: ["3000"]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:3000/"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    stop_grace_period: 30s
+    mem_limit: "${DASHBOARD_MEMORY:-384m}"
+    cpus: "${DASHBOARD_CPUS:-0.5}"
+    pids_limit: 256
+    depends_on:
+      api:
+        condition: service_healthy
+        restart: true
+    networks: [edge]
+    logging: *default-logging
+
+  gateway:
+    image: "${GATEWAY_IMAGE:?set GATEWAY_IMAGE to a pinned image in the on-premises registry}"
+    pull_policy: "${IMAGE_PULL_POLICY:-always}"
+    restart: unless-stopped
+    user: "101:101"
+    read_only: true
+    entrypoint: ["nginx", "-g", "daemon off;"]
+    ports:
+      - "${HTTP_BIND_ADDRESS:-0.0.0.0}:${HTTP_PORT:-80}:8080"
+      - "${HTTPS_BIND_ADDRESS:-0.0.0.0}:${HTTPS_PORT:-443}:8443"
+    configs:
+      - source: gateway_config
+        target: /etc/nginx/nginx.conf
+    secrets:
+      - source: tls_certificate
+        target: tls.crt
+      - source: tls_private_key
+        target: tls.key
+      - source: dashboard_htpasswd
+        target: dashboard.htpasswd
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--no-check-certificate", "-O", "-", "https://127.0.0.1:8443/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    stop_grace_period: 30s
+    mem_limit: "${GATEWAY_MEMORY:-256m}"
+    cpus: "${GATEWAY_CPUS:-0.5}"
+    pids_limit: 256
+    depends_on:
+      api:
+        condition: service_healthy
+        restart: true
+      dashboard:
+        condition: service_healthy
+        restart: true
+    networks: [edge]
+    logging: *default-logging
+
+configs:
+  gateway_config:
+    file: ./deploy/compose/nginx.conf
+
+secrets:
+  postgres_password:
+    file: "${SECRETS_DIR:-./secrets/agentmesh}/postgres_password"
+  nats_token:
+    file: "${SECRETS_DIR:-./secrets/agentmesh}/nats_token"
+  redis_password:
+    file: "${SECRETS_DIR:-./secrets/agentmesh}/redis_password"
+  dashboard_api_token:
+    file: "${SECRETS_DIR:-./secrets/agentmesh}/dashboard_api_token"
+  automation_api_token:
+    file: "${SECRETS_DIR:-./secrets/agentmesh}/automation_api_token"
+  outbound_agent_token:
+    file: "${SECRETS_DIR:-./secrets/agentmesh}/outbound_agent_token"
+  tls_certificate:
+    file: "${SECRETS_DIR:-./secrets/agentmesh}/tls.crt"
+  tls_private_key:
+    file: "${SECRETS_DIR:-./secrets/agentmesh}/tls.key"
+  dashboard_htpasswd:
+    file: "${SECRETS_DIR:-./secrets/agentmesh}/dashboard.htpasswd"
+
+networks:
+  edge:
+  backend:
+    internal: true
+  egress:
+
+volumes:
+  postgres-data:
+  nats-data:
+  redis-data:
