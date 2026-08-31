@@ -285,6 +285,7 @@ docs/                   roadmap and architecture notes
 - [LLM providers](docs/llm-providers.md)
 - [MCP tool gateway](docs/mcp-tools.md)
 - [OpenTelemetry](docs/opentelemetry.md)
+- [Operations dashboard](docs/dashboard.md)
 - [Agent Protocol versioning](docs/protocol-versioning.md)
 - [Architectural reassessment](docs/architectural-reassessment.md)
 - [Configuration and operations](docs/configuration.md)

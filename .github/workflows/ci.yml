@@ -9,6 +9,35 @@ permissions:
   contents: read
 
 jobs:
+  dashboard:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: dashboard
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+
+      - name: Install dashboard dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Capture dashboard lockfile
+        uses: actions/upload-artifact@v6
+        with:
+          name: dashboard-lock
+          path: dashboard/package-lock.json
+
+      - name: Typecheck dashboard
+        run: npm run typecheck
+
+      - name: Build dashboard
+        run: npm run build
+
   test:
     runs-on: ubuntu-latest
     steps:

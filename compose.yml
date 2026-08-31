@@ -82,6 +82,22 @@ services:
       timeout: 3s
       retries: 5
 
+  dashboard:
+    build:
+      context: ./dashboard
+    ports:
+      - "3000:3000"
+    environment:
+      AGENTMESH_API_URL: "http://agentmesh:8080"
+    depends_on:
+      agentmesh:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:3000"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
 volumes:
   postgres-data:
   nats-data:
