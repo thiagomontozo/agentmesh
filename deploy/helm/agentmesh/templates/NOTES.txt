@@ -1,0 +1,12 @@
+AgentMesh has been rendered as separate API and Worker Deployments.
+
+API service: {{ include "agentmesh.fullname" . }}-api:{{ .Values.api.service.port }}
+{{- if .Values.dashboard.enabled }}
+Dashboard service: {{ include "agentmesh.fullname" . }}-dashboard:{{ .Values.dashboard.service.port }}
+{{- end }}
+
+The runtime Secret must exist before Pods can become ready:
+  {{ include "agentmesh.secretName" . }}
+
+Run the chart smoke test with:
+  helm test {{ .Release.Name }} -n {{ .Release.Namespace }}

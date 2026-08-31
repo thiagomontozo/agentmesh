@@ -1,25 +1,22 @@
-# Architectural reassessment after Items 1–33
+# Architectural reassessment
 
-This reassessment uses only the code and tests present after Agent Protocol
-versioning. Scores follow the project rubric: `0` absent, `1` initial concept,
+This reassessment uses only the current code, manifests, and tests. Scores
+follow the project rubric: `0` absent, `1` initial concept,
 `2` partial, `3` functionally basic, `4` functionally solid, `5` mature. A score
 is not increased merely because related code exists.
 
-> Post-audit update: the critical platform increment added separate API/Worker
-> processes with crash/restart acceptance coverage, cross-replica cancellation,
-> renewable Workflow scheduler ownership, and opt-in external-effect
-> idempotency. The subsequent important increment added inbound RBAC, durable
-> audit records, request-time secret rotation, bounded metrics, and a real
-> mixed-version compatibility gate. A further operational increment added
-> dependency outage/recovery and concurrent multi-worker load gates. The
-> historical scores below describe the Item 34 checkpoint;
-> resolved critical gaps are tracked here, in the roadmap, and in current
-> architecture documentation.
+> Current update: the original Item 34 checkpoint was followed by separate
+> API/Worker process tests, cross-replica cancellation, renewable Workflow
+> ownership, external-effect idempotency, inbound RBAC, durable audit records,
+> secret rotation, bounded Prometheus metrics, OpenTelemetry, mixed-version and
+> dependency-failure CI gates, an operations dashboard, and Helm/GitOps
+> deployment. The classification below incorporates those code-backed
+> increments rather than preserving the historical checkpoint.
 
 ## Executive conclusion
 
-AgentMesh is a consolidated **Level 6 — Multi-Agent Orchestrator** and a partial
-**Level 7 — Distributed Agent Platform**.
+AgentMesh is a consolidated **Level 7 — Distributed Agent Platform** at a
+functional, pre-production-maturity level.
 
 It is more than an Agent executor or control plane: independent HTTP Agents use
 a language-neutral protocol; deterministic routing can choose by capability,
@@ -27,13 +24,13 @@ health, load, capacity, and priority; persisted DAG Workflows execute sequential
 fan-out/fan-in, and conditional branches through normal Runs; and Agent-to-Agent
 calls remain mediated by the control plane.
 
-The Level 7 classification is not consolidated. Production components use
-shared PostgreSQL, Redis, and NATS, with leases, fencing, durable work, distributed
-events, and recovery. However, the acceptance test runs two logical replicas in
-one Go process rather than separate processes/containers. Distributed
-cancellation is persisted but not signaled immediately to a remote worker,
-Workflow scheduler ownership is not coordinated across process roles, and
-external Agent side effects cannot be fenced by AgentMesh.
+The distributed claim rests on shared PostgreSQL, Redis, and NATS, with leases,
+fencing, durable work/events, ownership-safe recovery, independently executable
+API and Worker roles, cross-process acceptance tests, rolling-version and
+dependency-outage gates, and a horizontally scalable Kubernetes topology. This
+does not imply exactly-once remote effects or production maturity: external
+Agents must honor effect idempotency, and real-cluster capacity, partition, soak,
+backup, restore, and disaster-recovery exercises remain operator obligations.
 
 ## Scorecard
 
@@ -44,30 +41,16 @@ external Agent side effects cannot be fenced by AgentMesh.
 | Agent Runtime | 4/5 | Runtime interface, resolver registry, demo adapter, remote HTTP implementation, context/timeout, security policy, and authentication. A new external HTTP Agent needs data/configuration, not Go recompilation; a new transport runtime still requires code. |
 | Agent Protocol | 4/5 | Explicit V1 JSON types, structured error, idempotency identity, typed version compatibility, controlled unsupported-version code, and language-neutral tests. No streaming, heartbeat, capability negotiation, or V2 negotiation. |
 | Router | 4/5 | Exact multi-capability matching; unhealthy exclusion; unknown fallback; normalized load, capacity, priority, creation time, and ID ranking; explicit Agent ID remains supported. No semantic inference from unstructured text. |
-| Orchestrator | 3/5 | Persisted DAGs, sequential execution, fan-out/fan-in, deterministic conditions, cancellation, recovery, events, parent/child Runs, and mediated Agent-to-Agent calls. No loops, compensation, dynamic DAG mutation, planner, or distributed scheduler ownership. |
-| Observability | 3/5 | Structured correlated logs, Run/Agent/instance/worker/attempt IDs, duration, persisted events, SSE replay, and cross-replica event transport. No operational metrics or distributed tracing. |
+| Orchestrator | 4/5 | Persisted DAGs, sequential execution, fan-out/fan-in, deterministic conditions, cancellation, events, parent/child Runs, mediated Agent-to-Agent calls, renewable scheduler ownership, recovery scanning, and replica takeover. No loops, compensation, dynamic DAG mutation, or planner. |
+| Observability | 4/5 | Structured correlated logs, Run/Agent/instance/worker/attempt IDs, duration, bounded Prometheus metrics, opt-in OTLP traces/metrics, persisted events, SSE replay, and cross-replica event transport. No opinionated alert/SLO package or trace storage backend. |
 | Persistence | 4/5 | PostgreSQL repositories and ordered migrations cover Agents, Runs, events, lineage, routing, Workflows, and conditions; Memory implements the same repository interfaces; Redis is a cache/coordination layer. No archival/partitioning strategy or schema compatibility matrix. |
-| Fault tolerance | 4/5 | Retry/backoff, attempt timeout, panic isolation, cancellation, lease renewal, fencing, stale-writer rejection, idempotency, DLQ, and abandoned-Run recovery. Remote side effects remain outside the fence and cancellation signaling is not fully distributed. |
-| Distributed execution | 3/5 | Shared JetStream work, PostgreSQL state, Redis leases/fencing sequence, NATS events, and a two-replica logical acceptance test are functional. Separate-process/container, network-partition, rolling-upgrade, and sustained-load evidence is absent. |
+| Fault tolerance | 4/5 | Retry/backoff, attempt timeout, panic isolation, distributed cancellation, lease renewal, fencing, stale-writer rejection, idempotency, DLQ, and abandoned-Run recovery. Remote side effects remain outside the fence and require Agent-side idempotency. |
+| Distributed execution | 4/5 | Shared JetStream work, PostgreSQL state, Redis leases/fencing, NATS events, independent API/Worker processes, cross-process crash/recovery, rolling-version, dependency-outage, concurrent-load tests, and an HPA-enabled Helm topology are functional. Adverse partition and long-duration cluster soak evidence remains external to CI. |
 | Extensibility | 4/5 | Remote Python/Node/other Agents can share HTTP V1, capabilities, authentication, and routing without Engine changes. New transport families, protocol majors, and secret providers require adapter code by design. |
 
 ## Level classification
 
-**Level consolidated: 6 — Multi-Agent Orchestrator**
-
-Evidence:
-
-- `router.Router.Select` automatically chooses an eligible Agent from declared
-  capabilities and operational state.
-- `workflow.Manager` turns persisted DAG Steps into ordinary Runs, propagates
-  outputs, reconciles parallel branches, conditions, failures, cancellation, and
-  restart recovery.
-- `POST /api/v1/runs/{id}/children` creates bounded, idempotent Agent-to-Agent
-  child Runs through the same Engine and observability path.
-- `runtime.HTTPRuntime` and Agent Protocol V1 execute independently implemented
-  external Agents through one contract.
-
-**Level partially implemented: 7 — Distributed Agent Platform**
+**Level consolidated: 7 — Distributed Agent Platform**
 
 Evidence:
 
@@ -78,58 +61,27 @@ Evidence:
 - persistent NATS events make Run lifecycle and SSE visible across replicas.
 - `TestRealMultiReplicaControlPlane` validates two independently assembled
   replica stacks against real PostgreSQL, Redis, and NATS dependencies.
+- `TestSeparateProcessesExecutePreserveAndRecoverRuns` proves process-boundary
+  execution, SSE/cancellation, valid-owner preservation, crash recovery, and API
+  restart; the load test exercises two Worker processes without duplicate starts.
+- `workflow.Manager` renews ownership and supports replica takeover while
+  continuing to use fenced Runs for every Step.
+- `deploy/helm/agentmesh` maps those roles to independent, autoscaled Deployments
+  with probes, disruption budgets, topology spreading, and external durable
+  dependencies.
 
-The missing separate-process and adverse-network evidence prevents a consolidated
-Level 7 claim.
+**Level partially implemented: none.** Level 7 is the highest stage in the
+project rubric; the 4/5 component scores identify maturity work rather than an
+unimplemented next architectural level.
 
-## Next gap
+## Residual boundaries
 
-### Critical
-
-1. ~~Add a process/container-level multi-replica acceptance test:~~ independent
-   AgentMesh A/B processes, process kill, restart, valid-owner preservation,
-   cross-replica SSE, idempotency, and lease/fence behavior are now exercised by
-   `TestSeparateProcessesExecutePreserveAndRecoverRuns`; DLQ remains covered by
-   the real-dependency logical-replica test.
-2. ~~Add distributed Run cancellation signaling.~~ Resolved by per-Run event
-   subscription with persisted polling fallback and a process-level test.
-3. ~~Define and enforce Workflow scheduler ownership.~~ Resolved with renewable
-   per-Workflow coordination leases, periodic recovery scans, and takeover tests.
-4. ~~Require and test Agent Protocol idempotency for irreversible external
-   effects.~~ Resolved with a stable per-Run effect key, opt-in strict Agent
-   acknowledgement, and a retry test that applies the reference external effect
-   once. AgentMesh still cannot prove atomic behavior inside a remote service.
-
-### Important
-
-1. ~~Add inbound API authentication/authorization and replace the trusted
-   Agent-to-Agent caller header assertion with cryptographic identity.~~ Resolved
-   by opt-in Bearer identities, bounded roles, and Agent-bound credentials that
-   override the legacy caller header.
-2. ~~Integrate an external secret provider/rotation path behind
-   `RequestAuthenticator`.~~ Resolved with request-time `SecretProvider`
-   resolution and atomically replaceable mounted files.
-3. ~~Add bounded operational metrics for queue depth, active Runs, latency,
-   attempts, failures, lease loss, recovery, and routing decisions.~~ Resolved
-   through the dependency-free Prometheus endpoint and bounded event/HTTP labels.
-4. ~~Validate rolling upgrades and storage/protocol backward compatibility with
-   mixed AgentMesh versions.~~ Resolved by a dedicated CI job that builds the
-   schema-016 baseline and current binary, then crosses API/Worker roles in both
-   directions on shared PostgreSQL, Redis, and NATS.
-
-### Desirable
-
-1. ~~Add dependency latency/outage and bounded concurrent load tests.~~ Resolved
-   for CI by pausing PostgreSQL, stopping/restarting Redis and NATS, proving
-   readiness degradation/recovery, completing a post-recovery Run, and checking
-   120 concurrent Runs across two worker processes without duplicate starts.
-   Asymmetric partitions, DNS faults, capacity benchmarks, and soak tests remain
-   deployment concerns.
-2. Add tracing only when cross-service latency diagnosis justifies its cost.
-3. Add Kubernetes/Helm examples after process-role and readiness semantics are
-   implemented and proven.
-4. Evaluate richer Workflow compensation or dynamic composition only from a
-   concrete use case; the finite DAG model should remain the default.
+There are no unchecked functional items in the versioned roadmap. Remaining
+work is deployment-specific validation: immutable production images and secret
+provisioning, real-cluster capacity/load/soak tests, backup/restore and disaster
+recovery drills, asymmetric network-partition exercises, SLOs/alerts, and an
+external telemetry backend. Richer Workflow compensation or dynamic composition
+should only be added for a concrete use case; the finite DAG remains the default.
 
 ## Evidence index
 
@@ -150,7 +102,7 @@ Level 7 claim.
 | Leases/fencing reject stale owners | `internal/cache/redis.go`, `internal/engine/engine.go`, `internal/store/postgres/postgres.go` | `Acquire`, `redisLease.Renew`, `ClaimRunExecution`, `UpdateRunFenced`, `RecoverRun` | Ownership is renewed and every terminal state write must carry the current execution fence. |
 | Distributed baseline is tested | `internal/integration/multi_replica_test.go` | `TestRealMultiReplicaControlPlane` | Cross-replica execution/read/SSE, normal non-duplication, DLQ, valid-owner recovery protection, expired-lease recovery, and idempotency use real dependencies. |
 | Separate-process behavior | `internal/integration/process_replicas_test.go` | `TestSeparateProcessesExecutePreserveAndRecoverRuns` | API and worker binaries prove cross-process execution/SSE/cancellation, valid-owner preservation, hard-kill recovery after lease expiry, and API restart. |
-| Metrics and tracing | repository-wide code | — | **NOT PROVEN:** no metrics exporter or distributed tracing implementation exists. |
+| Metrics and tracing | `internal/metrics/metrics.go`, `internal/telemetry/telemetry.go`, `internal/httpapi/server.go`, `internal/engine/engine.go` | `Registry.WritePrometheus`, `telemetry.New`, inbound/outbound instrumentation, Run/attempt spans | Bounded Prometheus metrics and opt-in OTLP HTTP trace/metric export are covered by focused tests and CI. |
 | Immediate distributed cancellation | `internal/engine/engine.go`, `internal/integration/process_replicas_test.go` | `Engine.Cancel`, `watchCancellation`, `TestSeparateProcessesExecutePreserveAndRecoverRuns` | Proven for context-aware runtimes across API and worker processes through NATS events with persisted polling fallback. |
 | External effects reuse one retry identity | `internal/runtime/http.go`, `internal/integration/external_agents_test.go` | `HTTPRuntime.Execute`, `TestExternalEffectIsAppliedOnceAcrossRetry` | Attempt keys change while the stable effect key is reused and strictly acknowledged; the reference Agent commits one effect across a `500` retry. |
 | Inbound identity and authorization are enforced | `internal/apiauth/auth.go`, `internal/httpapi/server.go` | `Authenticator.Middleware`, `authorized`, `createAgentChildRun` | Constant-time Bearer identity carries bounded roles; Agent-bound identity replaces the spoofable caller header when enabled. |
@@ -159,3 +111,4 @@ Level 7 claim.
 | Operational metrics are bounded | `internal/metrics/metrics.go` | `Registry`, `WrapBroker`, `WritePrometheus` | Finite HTTP/event/routing labels plus persisted Run-state gauges avoid Run/Agent/path cardinality. |
 | Mixed-version rolling upgrades are tested | `.github/workflows/ci.yml`, `scripts/rolling-upgrade-test.sh` | `compatibility` job | Schema-016 and current binaries cross API/Worker roles in both directions on shared PostgreSQL, Redis, and NATS. |
 | Dependency failure and load are exercised | `.github/workflows/ci.yml`, `scripts/dependency-resilience-test.sh`, `internal/integration/process_replicas_test.go` | `resilience` job, `TestSeparateProcessesSustainConcurrentLoadWithoutDuplicateAttempts` | A stalled database and stopped Redis/NATS drive bounded unready/recovery behavior; 120 concurrent Runs produce exactly 120 starts across two worker processes. |
+| Cloud-native topology is reproducible | `deploy/helm/agentmesh`, `deploy/gitops/argocd/agentmesh.yaml`, `.github/workflows/ci.yml` | Helm templates, `autoscaling/v2` HPAs, Argo CD `Application`, `cloud-native` job | Separate API/Worker Deployments, probes, PDBs, topology spreading, optional dashboard, external Secret references, deterministic GitOps sync, and default/variant chart rendering are validated in CI. |

@@ -74,6 +74,6 @@
 ## v0.5 — UI and cloud native
 - [x] Next.js dashboard
 - [x] WebSocket/SSE live run view
-- [ ] Kubernetes manifests / Helm chart
-- [ ] Horizontal scaling
-- [ ] GitOps example
+- [x] Kubernetes manifests / Helm chart
+- [x] Horizontal scaling
+- [x] GitOps example

@@ -1,0 +1,61 @@
+{{- if .Values.ingress.api.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "agentmesh.fullname" . }}-api
+  labels:
+    {{- include "agentmesh.labels" . | nindent 4 }}
+  {{- with .Values.ingress.api.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.ingress.api.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- with .Values.ingress.api.tls }}
+  tls:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.api.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "agentmesh.fullname" . }}-api
+                port: { name: http }
+{{- end }}
+{{- if and .Values.dashboard.enabled .Values.ingress.dashboard.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "agentmesh.fullname" . }}-dashboard
+  labels:
+    {{- include "agentmesh.labels" . | nindent 4 }}
+  {{- with .Values.ingress.dashboard.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.ingress.dashboard.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- with .Values.ingress.dashboard.tls }}
+  tls:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.dashboard.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "agentmesh.fullname" . }}-dashboard
+                port: { name: http }
+{{- end }}
