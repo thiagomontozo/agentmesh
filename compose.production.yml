@@ -166,6 +166,8 @@ services:
     image: "${REDIS_IMAGE:?set REDIS_IMAGE to a pinned image in the on-premises registry}"
     pull_policy: "${IMAGE_PULL_POLICY:-always}"
     restart: unless-stopped
+    user: "0:0"
+    working_dir: /data
     entrypoint: ["/bin/sh", "-ec"]
     command:
       - |
@@ -178,7 +180,8 @@ services:
           printf 'bind 0.0.0.0\nprotected-mode yes\nport 6379\nappendonly yes\nappendfsync everysec\n'
           printf 'requirepass %s\n' "$$password"
         } > /run/redis/redis.conf
-        exec redis-server /run/redis/redis.conf
+        chown redis:redis /run/redis/redis.conf
+        exec /usr/local/bin/docker-entrypoint.sh redis-server /run/redis/redis.conf
     secrets:
       - redis_password
     volumes:
@@ -196,6 +199,7 @@ services:
     cpus: "${REDIS_CPUS:-1.0}"
     pids_limit: 256
     cap_drop: [ALL]
+    cap_add: [CHOWN, SETGID, SETUID]
     security_opt:
       - no-new-privileges:true
     networks: [backend]
@@ -295,17 +299,13 @@ services:
     configs:
       - source: gateway_config
         target: /etc/nginx/nginx.conf
-        mode: 0444
     secrets:
       - source: tls_certificate
         target: tls.crt
-        mode: 0444
       - source: tls_private_key
         target: tls.key
-        mode: 0400
       - source: dashboard_htpasswd
         target: dashboard.htpasswd
-        mode: 0444
     tmpfs:
       - /tmp:size=64m,mode=1777
     cap_drop: [ALL]
