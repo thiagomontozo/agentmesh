@@ -22,15 +22,11 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version: "22"
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
 
       - name: Install dashboard dependencies
-        run: npm install --no-audit --no-fund
-
-      - name: Capture dashboard lockfile
-        uses: actions/upload-artifact@v6
-        with:
-          name: dashboard-lock
-          path: dashboard/package-lock.json
+        run: npm ci --no-audit --no-fund
 
       - name: Typecheck dashboard
         run: npm run typecheck
